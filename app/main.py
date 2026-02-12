@@ -12,11 +12,13 @@ import requests
 from dotenv import load_dotenv
 from fitparse import FitFile
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
 app = FastAPI()
+app.mount("/icons", StaticFiles(directory="icons"), name="icons")
 
 TOKEN_FILE = Path("data/strava_tokens.json")
 CALENDAR_FILE = Path("data/calendar_items.json")
@@ -198,6 +200,27 @@ def load_imported_activities() -> list[dict[str, Any]]:
 
 def save_imported_activities(items: list[dict[str, Any]]) -> None:
     write_json_file(IMPORTED_ACTIVITIES_FILE, items)
+
+
+def imported_activity_index(items: list[dict[str, Any]], activity_id: str) -> int:
+    return next((i for i, row in enumerate(items) if str(row.get("id")) == activity_id), -1)
+
+
+def apply_parsed_fit_to_activity(item: dict[str, Any], parsed: dict[str, Any], file_id: str, filename: str) -> dict[str, Any]:
+    summary = parsed.get("summary", {})
+    item["fit_id"] = file_id
+    item["fit_filename"] = Path(filename).name
+    item["distance"] = float(summary.get("distance_m") or item.get("distance") or 0)
+    item["moving_time"] = float(summary.get("duration_s") or item.get("moving_time") or 0)
+    if summary.get("start"):
+        item["start_date_local"] = str(summary.get("start"))
+    sport = str(summary.get("sport") or item.get("type") or "Ride").title()
+    item["type"] = sport
+    item["if_value"] = summary.get("if")
+    item["tss_override"] = summary.get("tss")
+    item["avg_power"] = summary.get("avg_power")
+    item["avg_hr"] = summary.get("avg_hr")
+    return item
 
 
 def default_settings() -> dict[str, Any]:
@@ -524,9 +547,13 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
         try:
             duration = float(payload.get("duration_min", 0) or 0)
             distance = float(payload.get("distance_km", 0) or 0)
+            distance_m = float(payload.get("distance_m", distance * 1000) or 0)
+            elevation_m = float(payload.get("elevation_m", 0) or 0)
             intensity = float(payload.get("intensity", 6) or 6)
             completed_duration = float(payload.get("completed_duration_min", 0) or 0)
             completed_distance = float(payload.get("completed_distance_km", 0) or 0)
+            completed_distance_m = float(payload.get("completed_distance_m", completed_distance * 1000) or 0)
+            completed_elevation_m = float(payload.get("completed_elevation_m", 0) or 0)
             completed_tss = float(payload.get("completed_tss", 0) or 0)
             completed_if = float(payload.get("completed_if", 0) or 0)
             planned_if = float(payload.get("planned_if", 0) or 0)
@@ -537,14 +564,27 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
         item["workout_type"] = workout_type
         item["duration_min"] = max(0.0, duration)
         item["distance_km"] = max(0.0, distance)
+        item["distance_m"] = max(0.0, distance_m)
+        item["elevation_m"] = max(0.0, elevation_m)
+        d_unit = str(payload.get("distance_unit", "km"))
+        e_unit = str(payload.get("elevation_unit", "m"))
+        item["distance_unit"] = d_unit if d_unit in {"km", "mi", "m"} else "km"
+        item["elevation_unit"] = e_unit if e_unit in {"m", "ft"} else "m"
         item["intensity"] = max(1.0, min(10.0, intensity))
         item["completed_duration_min"] = max(0.0, completed_duration)
         item["completed_distance_km"] = max(0.0, completed_distance)
+        item["completed_distance_m"] = max(0.0, completed_distance_m)
+        item["completed_elevation_m"] = max(0.0, completed_elevation_m)
         item["completed_tss"] = max(0.0, completed_tss)
         item["completed_if"] = max(0.0, completed_if)
         item["planned_if"] = max(0.0, planned_if)
         item["planned_tss"] = max(0.0, planned_tss)
         item["comments"] = str(payload.get("comments", "")).strip()
+        raw_feed = payload.get("comments_feed", [])
+        if isinstance(raw_feed, list):
+            item["comments_feed"] = [str(x).strip() for x in raw_feed if str(x).strip()]
+        else:
+            item["comments_feed"] = []
         feel = payload.get("feel")
         try:
             feel_val = int(feel) if feel is not None and str(feel).strip() else 0
@@ -608,18 +648,37 @@ def page() -> str:
       z-index: 20;
       background: linear-gradient(180deg, #113154 0%, #0e2843 100%);
       border-bottom: 1px solid rgba(255,255,255,0.12);
-      min-height: 56px;
+      min-height: 45px;
       display: grid;
       grid-template-columns: 1fr auto 1fr;
       align-items: center;
-      padding: 0 12px;
+      padding: 0 10px;
     }
 
     .brand {
-      color: #d9e8f5;
-      font-size: 16px;
-      font-weight: 800;
-      letter-spacing: 0.3px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
+    }
+
+    .brand img {
+      display: block;
+      height: 24px;
+      width: auto;
+      object-fit: contain;
+    }
+
+    .brand .brand-icon {
+      height: 28px;
+    }
+
+    .brand .brand-text {
+      height: 16px;
+    }
+
+    .brand .brand-text.hidden {
+      display: none;
     }
 
     .tabs {
@@ -634,7 +693,7 @@ def page() -> str:
       background: transparent;
       color: #d5e4f2;
       font-size: 13px;
-      padding: 8px 14px;
+      padding: 6px 12px;
       cursor: pointer;
     }
 
@@ -650,7 +709,7 @@ def page() -> str:
       align-items: center;
       gap: 8px;
       color: #dbe8f4;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
     }
 
@@ -659,8 +718,8 @@ def page() -> str:
       background: rgba(255, 255, 255, 0.08);
       color: #eef4fb;
       border-radius: 8px;
-      width: 28px;
-      height: 28px;
+      width: 24px;
+      height: 24px;
       cursor: pointer;
     }
 
@@ -888,6 +947,36 @@ def page() -> str:
       margin-bottom: 8px;
     }
 
+    .cal-nav {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .icon-nav {
+      width: 34px;
+      height: 34px;
+      border: 1px solid #d8e3f0;
+      border-radius: 8px;
+      background: #fff;
+      color: #3f5674;
+      font-size: 26px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .cal-month-select {
+      border: 1px solid #d0dceb;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 28px;
+      font-weight: 700;
+      color: #31455f;
+      background: #fff;
+      min-width: 300px;
+      font-family: inherit;
+    }
+
     .btn {
       border: 0;
       border-radius: 10px;
@@ -903,7 +992,7 @@ def page() -> str:
     .btn.primary { background: var(--blue); color: #fff; }
 
     .calendar-scroll {
-      height: 74vh;
+      height: calc(100vh - 175px);
       overflow-y: auto;
       border: 1px solid #e2ebf4;
       border-radius: 10px;
@@ -946,7 +1035,7 @@ def page() -> str:
     }
 
     .day {
-      min-height: 172px;
+      min-height: clamp(250px, 31vh, 420px);
       border: 1px solid #e7edf6;
       border-radius: 8px;
       background: #fdfefe;
@@ -1068,6 +1157,15 @@ def page() -> str:
       font-size: 10px;
     }
 
+    .work-card .wc-bottom {
+      margin-top: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #506885;
+      font-size: 10px;
+    }
+
     .work-card.done { border-top-color: #4db347; background: #f2f8ef; }
     .work-card.workout { border-top-color: #c7d5e6; background: #ffffff; }
     .work-card.unplanned { border-top-color: #97a4b8; background: #f1f3f6; }
@@ -1159,6 +1257,17 @@ def page() -> str:
 
     .modal.open { display: flex; }
 
+    .settings-card {
+      width: min(760px, 100%);
+      max-height: 90vh;
+      overflow: auto;
+      border-radius: 14px;
+      border: 1px solid #d4e1ef;
+      background: #fff;
+      box-shadow: 0 24px 44px rgba(12, 26, 42, 0.24);
+      padding: 18px;
+    }
+
     .modal-card {
       width: min(1320px, 100%);
       max-height: 94vh;
@@ -1219,7 +1328,7 @@ def page() -> str:
       gap: 10px;
     }
 
-    .type-btn .type-icon {
+    .type-icon {
       width: 32px;
       height: 32px;
       text-align: center;
@@ -1228,16 +1337,25 @@ def page() -> str:
       justify-content: center;
       border-radius: 8px;
       background: #eef4fb;
+      overflow: hidden;
+      flex: 0 0 32px;
     }
 
-    .type-btn .type-icon svg {
+    .type-icon img {
       width: 22px;
       height: 22px;
-      stroke: #2a4b72;
-      fill: none;
-      stroke-width: 2;
-      stroke-linecap: round;
-      stroke-linejoin: round;
+      object-fit: contain;
+      display: block;
+    }
+
+    .type-btn .type-icon {
+      background: #eef4fb;
+    }
+
+    .type-btn .type-icon img {
+      width: 22px;
+      height: 22px;
+      object-fit: contain;
     }
 
     .type-btn:hover .type-icon {
@@ -1363,6 +1481,16 @@ def page() -> str:
       z-index: 60;
     }
 
+    #actionModal .modal-card {
+      width: min(920px, 100%);
+      max-height: 66vh;
+      padding: 14px;
+    }
+
+    #actionModal .m-title { font-size: 44px; }
+    #actionModal .section-label { font-size: 30px; margin: 10px 0 8px; }
+    #actionModal .type-btn { font-size: 28px; padding: 10px 12px; }
+
     .wv-shell {
       border: 1px solid #d7e1ef;
       border-radius: 12px;
@@ -1374,27 +1502,76 @@ def page() -> str:
       display: grid;
       grid-template-columns: 1fr auto;
       gap: 10px;
-      align-items: center;
+      align-items: start;
       padding: 12px 14px;
       border-bottom: 1px solid #e3ebf4;
       background: #f8fbff;
     }
 
-    .wv-title {
-      margin: 0;
-      font-size: 24px;
-      color: #1f2f43;
+    .wv-head-main {
+      display: grid;
+      gap: 6px;
     }
 
-    .wv-sub {
-      margin: 2px 0 0;
+    .wv-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .wv-title-row .type-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 10px;
+      flex: 0 0 48px;
+    }
+
+    .wv-title-row .type-icon img {
+      width: 33px;
+      height: 33px;
+    }
+
+    .wv-title-input {
+      border: 1px solid #c9d7e9;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 22px;
+      font-weight: 700;
+      color: #1f2f43;
+      min-width: 260px;
+      flex: 1;
+      font-family: inherit;
+    }
+
+    .wv-sport-select {
+      border: 1px solid #c9d7e9;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 14px;
+      color: #2c4f79;
+      background: #fff;
+      font-family: inherit;
+    }
+
+    .wv-meta-line {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
       color: #5f758e;
       font-size: 12px;
+    }
+
+    .wv-meta-line strong {
+      color: #1f2f43;
+      font-size: 16px;
     }
 
     .wv-tabs {
       display: flex;
       gap: 6px;
+      align-items: center;
     }
 
     .wv-tab {
@@ -1442,15 +1619,24 @@ def page() -> str:
     }
 
     .feel-btn:disabled,
-    .rpe-select:disabled {
+    .rpe-slider:disabled {
       opacity: 0.45;
       cursor: not-allowed;
     }
 
+    .rpe-slider {
+      width: 100%;
+    }
+
     .wv-body {
       padding: 14px;
-      max-height: 72vh;
+      max-height: 76vh;
       overflow: auto;
+    }
+
+    .workout-view-modal .modal-card {
+      width: min(760px, 100%) !important;
+      max-height: 95vh;
     }
 
     .wv-grid {
@@ -1493,6 +1679,62 @@ def page() -> str:
       color: #1f2f43;
       font-size: 18px;
       margin-top: 2px;
+    }
+
+    .wv-file-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border: 1px solid #dce6f2;
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: #fff;
+      margin-top: 8px;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .wv-file-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .comment-feed {
+      border: 1px solid #dde6f1;
+      border-radius: 8px;
+      background: #fff;
+      min-height: 90px;
+      max-height: 180px;
+      overflow: auto;
+      padding: 8px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .comment-feed .comment-item {
+      border: 1px solid #e1e9f4;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+      color: #2f455f;
+      background: #f9fcff;
+      white-space: pre-wrap;
+    }
+
+    .comment-input-row {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .comment-input-row input {
+      flex: 1;
+      border: 1px solid #cddaea;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-family: inherit;
     }
 
     .pc-table {
@@ -1658,6 +1900,17 @@ def page() -> str:
       text-align: left;
     }
 
+    .tp-unit-select {
+      width: 100%;
+      border: 1px solid #cfd9e7;
+      border-radius: 6px;
+      background: #fff;
+      height: 34px;
+      padding: 5px 7px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+
     .tp-minmax-head {
       display: grid;
       grid-template-columns: 110px 1fr 1fr 1fr 80px;
@@ -1765,17 +2018,16 @@ def page() -> str:
 </head>
 <body>
   <header class="top-nav">
-    <div class="brand">TRAININGFREAKS</div>
+    <div class="brand">
+      <img id="brandIcon" class="brand-icon" src="/icons/logos/logo.png" alt="Training Freaks logo" />
+      <img id="brandText" class="brand-text" src="/icons/logos/logotext.png" alt="Training Freaks" />
+    </div>
     <nav class="tabs">
       <button class="tab active" data-view="home">Home</button>
       <button class="tab" data-view="calendar">Calendar</button>
       <button class="tab" data-view="dashboard">Dashboard</button>
-      <button class="tab" data-view="settings">Settings</button>
     </nav>
     <div class="nav-right">
-      <button class="import-btn" id="uploadFitBtn">Import FIT</button>
-      <button class="unit-btn" id="distanceUnitBtn">Dist: km</button>
-      <button class="unit-btn" id="elevationUnitBtn">Elev: m</button>
       <input id="uploadFitInput" type="file" accept=".fit" style="display:none;" />
       <span>Amir LaGasse</span>
       <button class="nav-settings" id="globalSettings" title="Settings">&#9881;</button>
@@ -1863,8 +2115,15 @@ def page() -> str:
     <section id="view-calendar" class="view">
       <div class="calendar-wrap">
         <div class="calendar-head">
-          <h3 style="margin: 0; color: #4f657d; text-transform: uppercase; letter-spacing: 0.35px; font-size: 13px;">Month-by-Month Calendar</h3>
-          <button class="btn secondary" id="jumpToday">Jump to Current Month</button>
+          <div class="cal-nav">
+            <button class="icon-nav" id="calPrevMonth" aria-label="Previous month">&#8249;</button>
+            <select id="calMonthSelect" class="cal-month-select"></select>
+            <button class="btn secondary" id="calTodayBtn">Today</button>
+            <button class="icon-nav" id="calNextMonth" aria-label="Next month">&#8250;</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="import-btn" id="uploadFitBtn" title="Import FIT" aria-label="Import FIT">&#8682;</button>
+          </div>
         </div>
         <div id="calendarScroll" class="calendar-scroll"></div>
       </div>
@@ -1906,8 +2165,14 @@ def page() -> str:
       </div>
     </section>
 
-    <section id="view-settings" class="view">
-      <div class="panel" style="max-width:760px;">
+  </main>
+  <div id="settingsModal" class="modal">
+    <div class="settings-card">
+      <div class="modal-top" style="margin-bottom:6px;">
+        <h3 style="margin:0;">Settings</h3>
+        <button class="icon-btn" id="closeSettings">&times;</button>
+      </div>
+      <div class="panel" style="box-shadow:none;">
         <h3 class="panel-title"><span>FTP Settings</span></h3>
         <div class="grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
           <div class="field"><label>Bike FTP (W)</label><input id="ftpRide" type="number" min="50" max="600" placeholder="--" /></div>
@@ -1922,8 +2187,8 @@ def page() -> str:
           <span id="settingsSavedMsg" class="meta" style="display:none;color:#17733e;">Saved</span>
         </div>
       </div>
-    </section>
-  </main>
+    </div>
+  </div>
 
   <div id="actionModal" class="modal">
     <div class="modal-card">
@@ -2090,22 +2355,45 @@ def page() -> str:
   </div>
 
   <div id="workoutViewModal" class="modal workout-view-modal">
-    <div class="modal-card" style="padding: 0; width: min(860px, 100%);">
+    <div class="modal-card" style="padding: 0; width: min(900px, 100%);">
       <div class="wv-shell">
         <div class="wv-top">
-          <div>
-            <h2 class="wv-title" id="wvTitle">Workout</h2>
-            <p class="wv-sub" id="wvSub">Details</p>
+          <div class="wv-head-main">
+            <div class="wv-title-row">
+              <span id="wvSportIcon" class="type-icon"></span>
+              <input id="wvTitle" class="wv-title-input" value="Workout" />
+              <select id="wvSportSelect" class="wv-sport-select">
+                <option>Run</option>
+                <option>Bike</option>
+                <option>Swim</option>
+                <option>Strength</option>
+                <option>Other</option>
+              </select>
+            </div>
+            <div class="wv-meta-line">
+              <span id="wvSub">Details</span>
+              <strong id="wvHeaderDuration">--:--:--</strong>
+              <strong id="wvHeaderDistance">-- km</strong>
+              <strong id="wvHeaderTss">-- TSS</strong>
+            </div>
           </div>
           <div class="wv-tabs">
-            <button class="wv-tab active" data-wv-tab="summary">Summary</button>
-            <button class="wv-tab" data-wv-tab="analyze">Analyze</button>
-            <button class="wv-tab" id="wvUnpairBtn" style="display:none;">Unpair</button>
-            <button class="wv-tab" id="wvDeleteBtn">Delete</button>
+            <button class="wv-tab active" id="wvFilesTabBtn">Files</button>
+            <button class="wv-tab" id="wvAnalyzeToggleBtn">Analyze</button>
             <button class="icon-btn" id="closeWorkoutView">&times;</button>
           </div>
         </div>
         <div class="wv-body">
+          <section id="wvFilesTab">
+            <div class="wv-card">
+              <h3 style="margin:0 0 10px;">Upload Device File</h3>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button class="btn secondary" id="wvBrowseFilesBtn">Browse Files</button>
+                <span class="meta">Upload .fit to attach and recalculate workout metrics.</span>
+              </div>
+              <div id="wvFileList" style="margin-top:10px;"></div>
+            </div>
+          </section>
           <section id="wvSummary">
             <div class="wv-grid-vertical">
               <div class="wv-card">
@@ -2116,7 +2404,7 @@ def page() -> str:
                     <div class="tp-table-head">
                       <div></div><div>Planned</div><div>Completed</div><div></div>
                     </div>
-                  <div class="tp-row">
+                    <div class="tp-row">
                       <label>Duration</label>
                       <input id="pcDurPlan" class="tp-in" />
                       <input id="pcDurComp" class="tp-in" />
@@ -2126,7 +2414,24 @@ def page() -> str:
                       <label>Distance</label>
                       <input id="pcDistPlan" class="tp-in" />
                       <input id="pcDistComp" class="tp-in" />
-                      <div class="tp-unit distance-unit-label">km</div>
+                      <div class="tp-unit">
+                        <select id="pcDistanceUnit" class="tp-unit-select">
+                          <option value="km">km</option>
+                          <option value="mi">mi</option>
+                          <option value="m">m</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="tp-row">
+                      <label>Elevation</label>
+                      <input id="pcElevPlan" class="tp-in" />
+                      <input id="pcElevComp" class="tp-in" />
+                      <div class="tp-unit">
+                        <select id="pcElevationUnit" class="tp-unit-select">
+                          <option value="m">m</option>
+                          <option value="ft">ft</option>
+                        </select>
+                      </div>
                     </div>
                     <div class="tp-row">
                       <label>TSS</label>
@@ -2183,18 +2488,16 @@ def page() -> str:
                       </div>
                     </div>
                     <div class="field">
-                      <label>Rating of Perceived Exertion (RPE)</label>
-                      <select id="wvRpe" class="rpe-select">
-                        <option value="0">Unset</option>
-                        <option value="1">1</option><option value="2">2</option><option value="3">3</option>
-                        <option value="4">4</option><option value="5">5</option><option value="6">6</option>
-                        <option value="7">7</option><option value="8">8</option><option value="9">9</option>
-                        <option value="10">10</option>
-                      </select>
+                      <label>Rating of Perceived Exertion (RPE): <span id="wvRpeVal">--</span></label>
+                      <input id="wvRpe" class="rpe-slider" type="range" min="1" max="10" step="1" value="5" />
                     </div>
                     <div class="field">
                       <label>Post-activity comments</label>
-                      <textarea id="wvComments" style="min-height:120px;" placeholder="Enter comments"></textarea>
+                      <div id="wvCommentsFeed" class="comment-feed"></div>
+                      <div class="comment-input-row">
+                        <input id="wvCommentInput" placeholder="Enter a new comment" />
+                        <button class="btn secondary" id="wvPostCommentBtn" type="button">Post</button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2237,8 +2540,9 @@ def page() -> str:
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn ghost" id="cancelWorkoutView">Cancel</button>
         <button class="btn ghost" id="deleteWorkoutView">Delete</button>
+        <button class="btn ghost" id="cancelWorkoutView">Cancel</button>
+        <button class="btn secondary" id="saveWorkoutView">Save</button>
         <button class="btn primary" id="saveCloseWorkoutView">Save &amp; Close</button>
       </div>
     </div>
@@ -2260,45 +2564,25 @@ def page() -> str:
       ['Availability', 'calendar', 'availability'],
     ];
 
-    const ICONS = {
-      run: '<svg viewBox="0 0 24 24"><circle cx="14.5" cy="4.5" r="1.8"/><path d="M8 11.5l4-2.3 1.9 1.7 2.8 1.3"/><path d="M7.5 19l3-4.7"/><path d="M12.4 13.2l-1.4 5.7"/><path d="M14.1 13.4l5 2.8"/></svg>',
-      bike: '<svg viewBox="0 0 24 24"><circle cx="6" cy="17" r="3.2"/><circle cx="18" cy="17" r="3.2"/><path d="M6 17l4.2-7h4.4l2.8 7"/><path d="M10 10h2.8"/><path d="M14 7.5h2"/></svg>',
-      swim: '<svg viewBox="0 0 24 24"><path d="M3 16c1.3.9 2.6.9 3.9 0 1.3-.9 2.6-.9 3.9 0 1.3.9 2.6.9 3.9 0 1.3-.9 2.6-.9 3.9 0"/><path d="M6.5 10.5l2.2-2.1 2.1 2.1"/><path d="M11.7 8.6l2.2 2.1"/></svg>',
-      brick: '<svg viewBox="0 0 24 24"><rect x="3.5" y="8" width="17" height="8" rx="1.2"/><path d="M8.5 8v8M12 8v8M15.5 8v8"/></svg>',
-      pulse: '<svg viewBox="0 0 24 24"><path d="M3 12h4.2l1.8-3.7 3.1 7.2 2.1-4.2H21"/></svg>',
-      rest: '<svg viewBox="0 0 24 24"><rect x="3.5" y="9" width="17" height="6.5" rx="1.4"/><path d="M5.3 9V7.2M18.7 9V7.2M7 15.5v1.8M17 15.5v1.8"/></svg>',
-      mtb: '<svg viewBox="0 0 24 24"><circle cx="6" cy="17" r="3.2"/><circle cx="18" cy="17" r="3.2"/><path d="M6.2 17l4.2-7 3.4 2.2 2.1 4.8"/><path d="M12.2 8.2l1.7-.9"/></svg>',
-      strength: '<svg viewBox="0 0 24 24"><path d="M4.5 10v4M7.8 8.8v6.4M16.2 8.8v6.4M19.5 10v4"/><path d="M7.8 12h8.4"/></svg>',
-      timer: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="7"/><path d="M12 13V9.2M9.4 3.2h5.2"/></svg>',
-      ski: '<svg viewBox="0 0 24 24"><path d="M5 19.2L11.2 5M13 19.2L19.2 5"/><path d="M3.2 21h8M12.8 21h8"/></svg>',
-      rowing: '<svg viewBox="0 0 24 24"><path d="M3.5 18.2c2.5 1.8 14.5 1.8 17 0"/><path d="M9.3 8.5l3.6 3.6M12.9 12.1l2.8-4.8"/></svg>',
-      walk: '<svg viewBox="0 0 24 24"><circle cx="13.8" cy="4.3" r="1.8"/><path d="M11.5 9.5l2.3-2.2 2.1 3.1"/><path d="M12.5 10.3l-2.1 4.5"/><path d="M14.4 12.5l4 1.8"/></svg>',
-      other: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7.6v5.2"/><circle cx="12" cy="16.8" r="0.5" fill="currentColor" stroke="none"/></svg>',
-      event: '<svg viewBox="0 0 24 24"><path d="M8 4h8v3.8l-2 2.2 2 2.2V20H8v-7.8l2-2.2-2-2.2z"/></svg>',
-      goal: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/></svg>',
-      note: '<svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M15 3v3h3"/></svg>',
-      metrics: '<svg viewBox="0 0 24 24"><path d="M4 18h16"/><path d="M7 18v-6M12 18V8M17 18v-3"/></svg>',
-      calendar: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
-    };
-    const ICON_COLORS = {
-      run: '#35a11a',
-      bike: '#7a2ecf',
-      swim: '#1697be',
-      brick: '#9a3b32',
-      pulse: '#b12b67',
-      rest: '#60728f',
-      mtb: '#7b5b1a',
-      strength: '#50206d',
-      timer: '#8d2fe2',
-      ski: '#d66605',
-      rowing: '#16a7c0',
-      walk: '#3da220',
-      other: '#8d2fe2',
-      event: '#2151e0',
-      goal: '#2151e0',
-      note: '#5f6e89',
-      metrics: '#5f6e89',
-      calendar: '#5f6e89',
+    const ICON_ASSETS = {
+      run: '/icons/workouts/run.png',
+      bike: '/icons/workouts/bike.png',
+      swim: '/icons/workouts/swim.png',
+      brick: '/icons/workouts/brick.png',
+      pulse: '/icons/workouts/crosstrain.png',
+      rest: '/icons/workouts/day_off.png',
+      mtb: '/icons/workouts/mountian_bike.png',
+      strength: '/icons/workouts/strength.png',
+      timer: '/icons/workouts/other_custom.png',
+      ski: '/icons/workouts/XC_Ski.png',
+      rowing: '/icons/workouts/row.png',
+      walk: '/icons/workouts/walk.png',
+      other: '/icons/workouts/other_custom.png',
+      event: '/icons/workouts/event.png',
+      goal: '/icons/workouts/goal.png',
+      note: '/icons/workouts/note.png',
+      metrics: '/icons/workouts/note.png',
+      calendar: '/icons/workouts/note.png',
     };
 
     const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -2316,6 +2600,10 @@ def page() -> str:
     let distanceUnit = localStorage.getItem('distanceUnit') || 'km';
     let elevationUnit = localStorage.getItem('elevationUnit') || 'm';
     let currentFeel = 0;
+    let fitUploadTargetActivityId = null;
+    let fitUploadContext = 'global';
+    let modalDraft = null;
+    let calendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
     function localDateKey(d) {
       const dt = new Date(d);
@@ -2337,32 +2625,55 @@ def page() -> str:
       return localDateKey(d);
     }
 
-    function toDisplayDistanceFromMeters(meters) {
+    function toDisplayDistanceFromMeters(meters, unit = distanceUnit) {
       const m = Number(meters || 0);
-      if (distanceUnit === 'm') return { value: m, unit: 'm' };
-      if (distanceUnit === 'mi') return { value: m / 1609.344, unit: 'mi' };
+      if (unit === 'm') return { value: m, unit: 'm' };
+      if (unit === 'mi') return { value: m / 1609.344, unit: 'mi' };
       return { value: m / 1000, unit: 'km' };
     }
 
-    function toDisplayDistanceFromKm(km) {
-      return toDisplayDistanceFromMeters(Number(km || 0) * 1000);
+    function toDisplayDistanceFromKm(km, unit = distanceUnit) {
+      return toDisplayDistanceFromMeters(Number(km || 0) * 1000, unit);
     }
 
-    function fromDisplayDistanceToKm(val) {
+    function fromDisplayDistanceToKm(val, unit = distanceUnit) {
       const n = Number(val || 0);
       if (!Number.isFinite(n)) return 0;
-      if (distanceUnit === 'm') return n / 1000;
-      if (distanceUnit === 'mi') return n * 1.609344;
+      if (unit === 'm') return n / 1000;
+      if (unit === 'mi') return n * 1.609344;
+      return n;
+    }
+
+    function fromDisplayDistanceToMeters(val, unit = distanceUnit) {
+      return fromDisplayDistanceToKm(val, unit) * 1000;
+    }
+
+    function toDisplayElevationFromMeters(meters, unit = elevationUnit) {
+      const m = Number(meters || 0);
+      if (unit === 'ft') return { value: m * 3.28084, unit: 'ft' };
+      return { value: m, unit: 'm' };
+    }
+
+    function fromDisplayElevationToMeters(val, unit = elevationUnit) {
+      const n = Number(val || 0);
+      if (!Number.isFinite(n)) return 0;
+      if (unit === 'ft') return n / 3.28084;
       return n;
     }
 
     function fmtDistanceMeters(meters) {
-      const d = toDisplayDistanceFromMeters(meters);
+      const d = toDisplayDistanceFromMeters(meters, distanceUnit);
       return `${d.value.toFixed(distanceUnit === 'm' ? 0 : 1)} ${d.unit}`;
     }
 
+    function fmtDistanceMetersInUnit(meters, unit) {
+      const useUnit = unit || distanceUnit;
+      const d = toDisplayDistanceFromMeters(meters, useUnit);
+      return `${d.value.toFixed(useUnit === 'm' ? 0 : 1)} ${d.unit}`;
+    }
+
     function fmtDistanceKm(km) {
-      const d = toDisplayDistanceFromKm(km);
+      const d = toDisplayDistanceFromKm(km, distanceUnit);
       return `${d.value.toFixed(distanceUnit === 'm' ? 0 : 1)} ${d.unit}`;
     }
 
@@ -2379,9 +2690,8 @@ def page() -> str:
     }
 
     function fmtElevation(meters) {
-      const m = Number(meters || 0);
-      if (elevationUnit === 'ft') return `${Math.round(m * 3.28084)} ft`;
-      return `${Math.round(m)} m`;
+      const e = toDisplayElevationFromMeters(meters, elevationUnit);
+      return `${Math.round(e.value)} ${e.unit}`;
     }
 
     function monthKey(year, month) {
@@ -2393,12 +2703,20 @@ def page() -> str:
       document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
       document.getElementById('view-' + name).classList.add('active');
       document.getElementById('pageTitle').textContent = name.charAt(0).toUpperCase() + name.slice(1);
+      const brandText = document.getElementById('brandText');
+      if (brandText) {
+        brandText.classList.toggle('hidden', name !== 'home');
+      }
+      if (name === 'calendar') {
+        const now = new Date();
+        calendarCursor = new Date(now.getFullYear(), now.getMonth(), 1);
+        renderCalendar();
+      }
     }
 
     function updateUnitButtons() {
-      document.getElementById('distanceUnitBtn').textContent = `Dist: ${distanceUnit}`;
-      document.getElementById('elevationUnitBtn').textContent = `Elev: ${elevationUnit}`;
       document.querySelectorAll('.distance-unit-label').forEach((el) => { el.textContent = distanceUnit; });
+      document.querySelectorAll('.elevation-unit-label').forEach((el) => { el.textContent = elevationUnit; });
     }
 
     function intensityByType(type) {
@@ -2624,12 +2942,19 @@ def page() -> str:
     }
 
     function iconSvg(name) {
-      const color = ICON_COLORS[name] || '#2a4b72';
-      return `<span class="type-icon" style="color:${color}">${(ICONS[name] || ICONS.other).replace('<svg', '<svg style="stroke:currentColor"')}</span>`;
+      const src = ICON_ASSETS[name] || ICON_ASSETS.other;
+      return `<span class="type-icon"><img src="${src}" alt="${name}"/></span>`;
     }
 
     function workoutIconKey(type) {
       const t = String(type || '').toLowerCase();
+      if (t.includes('brick')) return 'brick';
+      if (t.includes('cross')) return 'pulse';
+      if (t.includes('day off') || t.includes('rest')) return 'rest';
+      if (t.includes('mountain') || t.includes('mtn')) return 'mtb';
+      if (t.includes('custom')) return 'timer';
+      if (t.includes('ski')) return 'ski';
+      if (t.includes('row')) return 'rowing';
       if (t.includes('run') || t.includes('walk')) return 'run';
       if (t.includes('swim')) return 'swim';
       if (t.includes('strength')) return 'strength';
@@ -2639,12 +2964,8 @@ def page() -> str:
 
     function cardIcon(type) {
       const key = workoutIconKey(type);
-      const color = ICON_COLORS[key] || '#2a4b72';
-      const svg = (ICONS[key] || ICONS.other).replace(
-        '<svg',
-        '<svg style="stroke:currentColor;width:12px;height:12px;vertical-align:-1px;"',
-      );
-      return `<span style="display:inline-flex;align-items:center;color:${color};margin-right:4px;">${svg}</span>`;
+      const src = ICON_ASSETS[key] || ICON_ASSETS.other;
+      return `<span style="display:inline-flex;align-items:center;margin-right:4px;"><img src="${src}" alt="${key}" style="width:18px;height:18px;object-fit:contain;" /></span>`;
     }
 
     function feelEmoji(v) {
@@ -2659,6 +2980,40 @@ def page() -> str:
       });
     }
 
+    function commentsArrayFromEntity(entity) {
+      if (!entity) return [];
+      if (Array.isArray(entity.comments_feed)) {
+        return entity.comments_feed.map((x) => String(x || '').trim()).filter(Boolean);
+      }
+      if (typeof entity.comments === 'string' && entity.comments.trim()) return [entity.comments.trim()];
+      return [];
+    }
+
+    function renderCommentsFeed() {
+      const wrap = document.getElementById('wvCommentsFeed');
+      if (!modalDraft) {
+        wrap.innerHTML = '<div class="meta">No comments yet.</div>';
+        return;
+      }
+      const list = modalDraft.commentsFeed || [];
+      if (!list.length) {
+        wrap.innerHTML = '<div class="meta">No comments yet.</div>';
+        return;
+      }
+      wrap.innerHTML = list.map((c) => `<div class="comment-item">${c.replace(/</g, '&lt;')}</div>`).join('');
+    }
+
+    function commentCount(entity) {
+      return commentsArrayFromEntity(entity).length;
+    }
+
+    function formatStartClock(isoText) {
+      if (!isoText) return '--:--';
+      const dt = new Date(isoText);
+      if (Number.isNaN(dt.getTime())) return '--:--';
+      return dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase();
+    }
+
     function parseDurationToMin(text) {
       const raw = String(text || '').trim();
       if (!raw) return 0;
@@ -2669,6 +3024,20 @@ def page() -> str:
       }
       const n = Number(raw);
       return Number.isFinite(n) ? n : 0;
+    }
+
+    function formatDurationClock(mins) {
+      const totalSec = Math.round(Math.max(0, Number(mins || 0)) * 60);
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    function toSportIcon(typeLabel) {
+      const key = workoutIconKey(typeLabel);
+      const src = ICON_ASSETS[key] || ICON_ASSETS.other;
+      return `<span class="type-icon"><img src="${src}" alt="${key}" /></span>`;
     }
 
     function hasCompletedData(planned, completed) {
@@ -3004,10 +3373,151 @@ def page() -> str:
       await loadData(false);
     }
 
+    function updateRpeLabel() {
+      const slider = document.getElementById('wvRpe');
+      const label = document.getElementById('wvRpeVal');
+      if (slider.disabled) {
+        label.textContent = '--';
+        return;
+      }
+      label.textContent = String(slider.value || '--');
+    }
+
+    function setWorkoutMode(isAnalyze) {
+      const toggle = document.getElementById('wvAnalyzeToggleBtn');
+      const filesBtn = document.getElementById('wvFilesTabBtn');
+      const hasAnalyze = !toggle.classList.contains('disabled');
+      const showAnalyze = Boolean(isAnalyze && hasAnalyze);
+      document.getElementById('wvSummary').classList.toggle('hidden', showAnalyze);
+      document.getElementById('wvAnalyze').classList.toggle('hidden', !showAnalyze);
+      document.getElementById('wvFilesTab').classList.toggle('hidden', showAnalyze);
+      toggle.textContent = showAnalyze ? 'Summary' : 'Analyze';
+      toggle.classList.toggle('active', showAnalyze);
+      filesBtn.classList.toggle('active', !showAnalyze);
+    }
+
+    function syncUnitSelectValue(selectId, desired, allowed) {
+      const el = document.getElementById(selectId);
+      if (!el) return;
+      if (allowed.includes(desired)) {
+        el.value = desired;
+      } else {
+        el.value = allowed[0];
+      }
+    }
+
+    function recalcIfTssRows() {
+      const parseDurHours = (id) => parseDurationToMin(document.getElementById(id).value) / 60;
+      const recalcPair = (durId, tssId, ifId) => {
+        const hours = parseDurHours(durId);
+        const tss = Number(document.getElementById(tssId).value || 0);
+        const ifv = Number(document.getElementById(ifId).value || 0);
+        if (hours <= 0) return;
+        if (ifv > 0) {
+          document.getElementById(tssId).value = (hours * ifv * ifv * 100).toFixed(1);
+        } else if (tss > 0) {
+          document.getElementById(ifId).value = Math.sqrt(tss / (hours * 100)).toFixed(2);
+        }
+      };
+      recalcPair('pcDurPlan', 'pcTssPlan', 'pcIfPlan');
+      recalcPair('pcDurComp', 'pcTssComp', 'pcIfComp');
+    }
+
+    function renderWorkoutFiles(payload) {
+      const node = document.getElementById('wvFileList');
+      const data = payload.data || {};
+      const browseBtn = document.getElementById('wvBrowseFilesBtn');
+      browseBtn.disabled = false;
+      const rows = [];
+      const hasExisting = !!data.fit_id;
+      if (hasExisting && modalDraft && modalDraft.pendingDeleteFit) {
+        rows.push(`
+          <div class="wv-file-row">
+            <div><strong>${data.fit_filename || `${data.fit_id}.fit`}</strong><div class="meta">Will be deleted on Save</div></div>
+            <div class="wv-file-actions">
+              <button class="btn secondary" id="wvUndoDeleteFitBtn">Undo</button>
+            </div>
+          </div>
+        `);
+      } else if (hasExisting) {
+        const fileName = data.fit_filename || `${data.fit_id}.fit`;
+        rows.push(`
+          <div class="wv-file-row">
+            <div><strong>${fileName}</strong><div class="meta">FIT attached</div></div>
+            <div class="wv-file-actions">
+              <button class="btn secondary" id="wvRecalcFitBtn">Recalculate</button>
+              <button class="btn secondary" id="wvDeleteFitBtn">Delete</button>
+              <a class="btn secondary" id="wvDownloadFitBtn" href="/activities/${encodeURIComponent(data.id)}/fit/download">Download</a>
+            </div>
+          </div>
+        `);
+      }
+      if (modalDraft && modalDraft.pendingUploadName) {
+        rows.push(`
+          <div class="wv-file-row">
+            <div><strong>${modalDraft.pendingUploadName}</strong><div class="meta">Pending upload (saved on Save)</div></div>
+            <div class="wv-file-actions">
+              <button class="btn secondary" id="wvClearPendingUploadBtn">Remove</button>
+            </div>
+          </div>
+        `);
+      }
+      if (!rows.length) {
+        node.innerHTML = '<p class="meta">No files attached.</p>';
+        return;
+      }
+      node.innerHTML = rows.join('');
+      const undoBtn = document.getElementById('wvUndoDeleteFitBtn');
+      if (undoBtn) {
+        undoBtn.onclick = () => {
+          if (!modalDraft) return;
+          modalDraft.pendingDeleteFit = false;
+          renderWorkoutFiles(payload);
+        };
+      }
+      const clearPendingUploadBtn = document.getElementById('wvClearPendingUploadBtn');
+      if (clearPendingUploadBtn) {
+        clearPendingUploadBtn.onclick = () => {
+          if (!modalDraft) return;
+          modalDraft.pendingUploadFile = null;
+          modalDraft.pendingUploadName = '';
+          renderWorkoutFiles(payload);
+        };
+      }
+      const recalcBtn = document.getElementById('wvRecalcFitBtn');
+      if (recalcBtn) {
+        recalcBtn.onclick = async () => {
+          if (modalDraft && modalDraft.pendingDeleteFit) return;
+          const resp = await fetch(`/activities/${data.id}/fit/recalculate`, { method: 'POST' });
+          if (!resp.ok) return;
+          const refreshed = await resp.json();
+          window.currentWorkoutPayload = { ...payload, data: refreshed };
+          renderWorkoutSummary(window.currentWorkoutPayload);
+          await renderWorkoutAnalyze(window.currentWorkoutPayload);
+          renderWorkoutFiles(window.currentWorkoutPayload);
+          await loadData(false);
+        };
+      }
+      const delBtn = document.getElementById('wvDeleteFitBtn');
+      if (delBtn) {
+        delBtn.onclick = () => {
+          if (!modalDraft) return;
+          modalDraft.pendingDeleteFit = true;
+          renderWorkoutFiles(window.currentWorkoutPayload);
+        };
+      }
+    }
+
     function openWorkoutModal(payload) {
       window.currentWorkoutPayload = payload;
-      const data = payload.data;
+      const data = payload.data || {};
       const parentPlanned = payload.planned || null;
+      modalDraft = {
+        pendingDeleteFit: false,
+        pendingUploadFile: null,
+        pendingUploadName: '',
+        commentsFeed: commentsArrayFromEntity(parentPlanned || data),
+      };
       const typeLabel = parentPlanned
         ? (parentPlanned.workout_type || 'Workout')
         : payload.source === 'strava' ? (data.type || 'Workout') : (data.workout_type || 'Workout');
@@ -3016,70 +3526,96 @@ def page() -> str:
         : payload.source === 'strava'
           ? new Date(data.start_date_local).toLocaleString()
           : `${data.date} (Planned)`;
-      document.getElementById('wvTitle').textContent = parentPlanned ? (parentPlanned.title || 'Workout') : (data.title || data.name || 'Workout');
+      document.getElementById('wvTitle').value = parentPlanned ? (parentPlanned.title || 'Workout') : (data.title || data.name || 'Workout');
       document.getElementById('wvSub').textContent = `${typeLabel} • ${dateLabel}`;
-      switchWorkoutTab('summary');
-      renderWorkoutSummary(payload);
-      const analyzeBtn = document.querySelector('.wv-tab[data-wv-tab="analyze"]');
+      document.getElementById('wvSportIcon').innerHTML = toSportIcon(typeLabel);
+      const sportMap = { run: 'Run', bike: 'Bike', swim: 'Swim', strength: 'Strength' };
+      document.getElementById('wvSportSelect').value = sportMap[workoutIconKey(typeLabel)] || 'Other';
+      document.getElementById('wvCommentInput').value = '';
+
+      const analyzeToggle = document.getElementById('wvAnalyzeToggleBtn');
       const hasFile = !!(data.fit_id);
-      analyzeBtn.classList.toggle('disabled', !hasFile);
+      analyzeToggle.classList.toggle('disabled', !hasFile);
       if (hasFile) {
         renderWorkoutAnalyze(payload);
       } else {
         document.getElementById('wvAnalyze').classList.add('hidden');
+        document.getElementById('wvSelectionKv').innerHTML = '<div>No FIT stream for this workout.</div>';
       }
-      const unpairBtn = document.getElementById('wvUnpairBtn');
-      const pair = payload.pair || (payload.planned ? pairForPlanned(payload.planned.id) : pairForStrava(String(data.id)));
-      const completedExists = payload.source === 'strava' || hasCompletedData(parentPlanned || data, pair ? data : null);
-      document.querySelectorAll('.feel-btn').forEach((btn) => { btn.disabled = !completedExists; });
-      document.getElementById('wvRpe').disabled = !completedExists;
-      unpairBtn.style.display = pair ? 'inline-block' : 'none';
-      unpairBtn.onclick = async () => {
-        if (!pair) return;
-        await fetch(`/pairs/${pair.id}`, { method: 'DELETE' });
-        closeWorkoutModal();
-        await loadData(false);
-      };
-      const deleteBtn = document.getElementById('wvDeleteBtn');
-      deleteBtn.style.display = (payload.source === 'planned' || !!payload.planned || payload.source === 'strava') ? 'inline-block' : 'none';
-      deleteBtn.onclick = async () => {
-        if (payload.planned || payload.source === 'planned') {
-          const targetId = payload.planned ? payload.planned.id : data.id;
-          await fetch(`/calendar-items/${targetId}`, { method: 'DELETE' });
-        } else if (payload.source === 'strava') {
-          await fetch(`/activities/${data.id}`, { method: 'DELETE' });
-        } else {
-          return;
-        }
-        closeWorkoutModal();
-        await loadData(false);
-      };
+      renderWorkoutSummary(payload);
+      renderWorkoutFiles(payload);
+      setWorkoutMode(false);
       document.getElementById('workoutViewModal').classList.add('open');
     }
 
     function closeWorkoutModal() {
       document.getElementById('workoutViewModal').classList.remove('open');
+      modalDraft = null;
+      fitUploadContext = 'global';
+      fitUploadTargetActivityId = null;
     }
 
-    async function saveWorkoutViewAndClose() {
+    async function saveWorkoutView(closeAfter) {
       const payload = window.currentWorkoutPayload;
       if (!payload) return;
       const data = payload.data || {};
       const targetPlanned = payload.planned || (payload.source === 'planned' ? data : null);
+      recalcIfTssRows();
       const description = document.getElementById('wvDescription').value;
-      const comments = document.getElementById('wvComments').value;
+      const commentsFeed = modalDraft ? modalDraft.commentsFeed.slice() : [];
+      const comments = commentsFeed.length ? commentsFeed[commentsFeed.length - 1] : '';
+      const sport = document.getElementById('wvSportSelect').value || 'Other';
+      const distanceUnitLocal = document.getElementById('pcDistanceUnit').value || 'km';
+      const elevationUnitLocal = document.getElementById('pcElevationUnit').value || 'm';
       const plannedDuration = parseDurationToMin(document.getElementById('pcDurPlan').value);
-      const plannedDistanceKm = fromDisplayDistanceToKm(document.getElementById('pcDistPlan').value);
+      const plannedDistanceM = fromDisplayDistanceToMeters(document.getElementById('pcDistPlan').value, distanceUnitLocal);
+      const plannedElevationM = fromDisplayElevationToMeters(document.getElementById('pcElevPlan').value, elevationUnitLocal);
       const plannedTss = Number(document.getElementById('pcTssPlan').value || 0);
       const plannedIf = Number(document.getElementById('pcIfPlan').value || 0);
       const completedDuration = parseDurationToMin(document.getElementById('pcDurComp').value);
-      const completedDistanceKm = fromDisplayDistanceToKm(document.getElementById('pcDistComp').value);
+      const completedDistanceM = fromDisplayDistanceToMeters(document.getElementById('pcDistComp').value, distanceUnitLocal);
+      const completedElevationM = fromDisplayElevationToMeters(document.getElementById('pcElevComp').value, elevationUnitLocal);
       const completedTss = Number(document.getElementById('pcTssComp').value || 0);
       const completedIf = Number(document.getElementById('pcIfComp').value || 0);
-      const rpe = Number(document.getElementById('wvRpe').value || 0);
-      const hasCompleted = completedDuration > 0 || completedDistanceKm > 0 || completedTss > 0 || payload.source === 'strava';
+      const hasCompleted = completedDuration > 0 || completedDistanceM > 0 || completedTss > 0 || payload.source === 'strava';
+      const rpeVal = Number(document.getElementById('wvRpe').value || 0);
       const feel = hasCompleted ? currentFeel : 0;
-      const rpeOut = hasCompleted ? rpe : 0;
+      const rpeOut = hasCompleted ? rpeVal : 0;
+
+      let activityData = payload.source === 'strava' ? data : null;
+      if (activityData && modalDraft && modalDraft.pendingDeleteFit && activityData.fit_id) {
+        const delResp = await fetch(`/activities/${activityData.id}/fit`, { method: 'DELETE' });
+        if (delResp.ok) activityData = await delResp.json();
+      }
+      if (modalDraft && modalDraft.pendingUploadFile) {
+        if (activityData) {
+          const upResp = await fetch(`/activities/${encodeURIComponent(activityData.id)}/fit/upload?filename=${encodeURIComponent(modalDraft.pendingUploadName || modalDraft.pendingUploadFile.name)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: modalDraft.pendingUploadFile,
+          });
+          if (upResp.ok) activityData = await upResp.json();
+        } else if (targetPlanned) {
+          const upResp = await fetch(`/import-fit?filename=${encodeURIComponent(modalDraft.pendingUploadName || modalDraft.pendingUploadFile.name)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: modalDraft.pendingUploadFile,
+          });
+          if (upResp.ok) {
+            const uploaded = await upResp.json();
+            await fetch('/pairs', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                planned_id: targetPlanned.id,
+                strava_id: String(uploaded.id),
+                override_date: targetPlanned.date,
+                override_title: targetPlanned.title || 'Untitled Workout',
+              }),
+            });
+          }
+        }
+      }
 
       if (targetPlanned) {
         await fetch(`/calendar-items/${targetPlanned.id}`, {
@@ -3087,16 +3623,25 @@ def page() -> str:
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ...targetPlanned,
+            title: document.getElementById('wvTitle').value.trim() || targetPlanned.title || 'Untitled Workout',
+            workout_type: sport,
             duration_min: plannedDuration,
-            distance_km: plannedDistanceKm,
+            distance_km: plannedDistanceM / 1000,
+            distance_m: plannedDistanceM,
+            elevation_m: plannedElevationM,
+            distance_unit: distanceUnitLocal,
+            elevation_unit: elevationUnitLocal,
             planned_tss: plannedTss,
             planned_if: plannedIf,
             description,
             comments,
+            comments_feed: commentsFeed,
             feel,
             rpe: rpeOut,
             completed_duration_min: completedDuration,
-            completed_distance_km: completedDistanceKm,
+            completed_distance_km: completedDistanceM / 1000,
+            completed_distance_m: completedDistanceM,
+            completed_elevation_m: completedElevationM,
             completed_tss: completedTss,
             completed_if: completedIf,
           }),
@@ -3105,23 +3650,21 @@ def page() -> str:
         await fetch(`/activities/${data.id}/meta`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ description, comments, feel, rpe: rpeOut, if_value: completedIf, tss_override: completedTss }),
+          body: JSON.stringify({
+            description,
+            comments,
+            comments_feed: commentsFeed,
+            feel,
+            rpe: rpeOut,
+            if_value: completedIf,
+            tss_override: completedTss,
+            title: document.getElementById('wvTitle').value.trim(),
+            type: sport,
+          }),
         });
       }
-      closeWorkoutModal();
       await loadData(false);
-    }
-
-    function switchWorkoutTab(tab) {
-      const analyzeBtn = document.querySelector('.wv-tab[data-wv-tab="analyze"]');
-      if (tab === 'analyze' && analyzeBtn.classList.contains('disabled')) {
-        return;
-      }
-      document.querySelectorAll('.wv-tab[data-wv-tab]').forEach(el => {
-        el.classList.toggle('active', el.dataset.wvTab === tab);
-      });
-      document.getElementById('wvSummary').classList.toggle('hidden', tab !== 'summary');
-      document.getElementById('wvAnalyze').classList.toggle('hidden', tab !== 'analyze');
+      if (closeAfter) closeWorkoutModal();
     }
 
     function num(v) {
@@ -3157,15 +3700,15 @@ def page() -> str:
     }
 
     function renderWorkoutSummary(payload) {
-      const data = payload.data;
+      const data = payload.data || {};
       const parentPlanned = payload.planned || null;
       const explicitCompleted = parentPlanned ? completedFromPlanned(parentPlanned) : completedFromPlanned(data);
       const completedDurationMin = payload.source === 'strava'
         ? Number(data.moving_time || 0) / 60
         : explicitCompleted ? Number(explicitCompleted.moving_time || 0) / 60 : 0;
-      const completedDistanceKm = payload.source === 'strava'
-        ? Number(data.distance || 0) / 1000
-        : explicitCompleted ? Number(explicitCompleted.distance || 0) / 1000 : 0;
+      const completedDistanceM = payload.source === 'strava'
+        ? Number(data.distance || 0)
+        : explicitCompleted ? Number(explicitCompleted.distance || 0) : Number((parentPlanned || data).completed_distance_m || 0);
       const completedTss = payload.source === 'strava'
         ? activityToTss(data)
         : explicitCompleted ? Number(explicitCompleted.tss_override || 0) : 0;
@@ -3177,14 +3720,28 @@ def page() -> str:
         : payload.source === 'strava'
           ? new Date(data.start_date_local).toLocaleString()
           : `${data.date} (Planned)`;
+      const plannedObj = parentPlanned || data;
+      let distanceUnitLocal = String(plannedObj.distance_unit || distanceUnit || 'km');
+      let elevationUnitLocal = String(plannedObj.elevation_unit || elevationUnit || 'm');
+      syncUnitSelectValue('pcDistanceUnit', distanceUnitLocal, ['km', 'mi', 'm']);
+      syncUnitSelectValue('pcElevationUnit', elevationUnitLocal, ['m', 'ft']);
+
       document.getElementById('wvSummaryText').textContent = `${typeLabel} • ${dateLabel}`;
       document.getElementById('wvDescription').value = (parentPlanned && parentPlanned.description) || data.description || '';
-      document.getElementById('wvComments').value = (parentPlanned && parentPlanned.comments) || data.comments || '';
-      document.getElementById('wvRpe').value = String((parentPlanned && parentPlanned.rpe) || data.rpe || 0);
+      if (modalDraft) {
+        if (!Array.isArray(modalDraft.commentsFeed) || !modalDraft.commentsFeed.length) {
+          modalDraft.commentsFeed = commentsArrayFromEntity(parentPlanned || data);
+        }
+        renderCommentsFeed();
+      }
+      const savedRpe = Number((parentPlanned && parentPlanned.rpe) || data.rpe || 0);
+      document.getElementById('wvRpe').value = String(savedRpe > 0 ? savedRpe : 5);
       setFeelValue((parentPlanned && parentPlanned.feel) || data.feel || 0);
+
       const plannedDuration = parentPlanned ? Number(parentPlanned.duration_min || 0) : Number(data.duration_min || 0);
-      const plannedDistance = parentPlanned ? Number(parentPlanned.distance_km || 0) : Number(data.distance_km || 0);
-      const plannedObj = parentPlanned || data;
+      const plannedDistanceM = Number((plannedObj.distance_m || 0) || (Number(plannedObj.distance_km || 0) * 1000));
+      const plannedElevationM = Number(plannedObj.elevation_m || 0);
+      const completedElevationM = Number(plannedObj.completed_elevation_m || 0);
       const plannedTss = Number(plannedObj.planned_tss || 0) || (parentPlanned ? itemToTss(parentPlanned) : itemToTss(data));
       const plannedIf = plannedIF(plannedObj);
       const completedIf = payload.source === 'strava' ? activityIF(data) : completedIF({
@@ -3194,17 +3751,23 @@ def page() -> str:
         avg_power: data.avg_power,
         type: plannedObj.workout_type || data.type,
       });
-      document.getElementById('pcDurPlan').value = plannedDuration ? formatDurationMin(plannedDuration) : '--';
+
+      document.getElementById('pcDurPlan').value = plannedDuration ? formatDurationClock(plannedDuration) : '';
       document.getElementById('pcDurComp').value = completedDurationMin ? formatDurationMin(completedDurationMin) : '';
-      document.getElementById('pcDistPlan').value = plannedDistance ? `${toDisplayDistanceFromKm(plannedDistance).value.toFixed(distanceUnit === 'm' ? 0 : 1)}` : '--';
-      document.getElementById('pcDistComp').value = completedDistanceKm ? `${toDisplayDistanceFromKm(completedDistanceKm).value.toFixed(distanceUnit === 'm' ? 0 : 1)}` : '';
-      document.getElementById('pcTssPlan').value = plannedTss ? String(plannedTss) : '--';
+      const pd = toDisplayDistanceFromMeters(plannedDistanceM, distanceUnitLocal);
+      const cd = toDisplayDistanceFromMeters(completedDistanceM, distanceUnitLocal);
+      const pe = toDisplayElevationFromMeters(plannedElevationM, elevationUnitLocal);
+      const ce = toDisplayElevationFromMeters(completedElevationM, elevationUnitLocal);
+      document.getElementById('pcDistPlan').value = plannedDistanceM > 0 ? pd.value.toFixed(distanceUnitLocal === 'm' ? 0 : 1) : '';
+      document.getElementById('pcDistComp').value = completedDistanceM > 0 ? cd.value.toFixed(distanceUnitLocal === 'm' ? 0 : 1) : '';
+      document.getElementById('pcElevPlan').value = plannedElevationM > 0 ? pe.value.toFixed(elevationUnitLocal === 'm' ? 0 : 1) : '';
+      document.getElementById('pcElevComp').value = completedElevationM > 0 ? ce.value.toFixed(elevationUnitLocal === 'm' ? 0 : 1) : '';
+      document.getElementById('pcTssPlan').value = plannedTss ? String(Math.round(plannedTss)) : '';
       document.getElementById('pcTssComp').value = completedTss ? String(Math.round(completedTss)) : '';
       document.getElementById('pcIfPlan').value = plannedIf ? Number(plannedIf).toFixed(2) : '';
       document.getElementById('pcIfComp').value = completedIf ? Number(completedIf).toFixed(2) : '';
-      const fitSummary = data.fit_id ? null : null;
-      document.getElementById('wvHrAvg').value = completedTss ? String(Math.round(120 + completedTss * 0.5)) : '';
-      document.getElementById('wvPowerAvg').value = completedTss ? String(Math.round(150 + completedTss * 1.8)) : '';
+      document.getElementById('wvHrAvg').value = data.avg_hr ? String(Math.round(data.avg_hr)) : '';
+      document.getElementById('wvPowerAvg').value = data.avg_power ? String(Math.round(data.avg_power)) : '';
       if (data.fit_id) {
         fetch(`/fit/${data.fit_id}`).then(r => r.ok ? r.json() : null).then((fit) => {
           if (!fit) return;
@@ -3214,69 +3777,47 @@ def page() -> str:
         }).catch(() => {});
       }
 
-      const canEditCompleted = payload.source !== 'strava' && (parentPlanned || data.kind === 'workout');
-      ['pcDurComp', 'pcDistComp', 'pcTssComp', 'pcIfComp', 'pcDurPlan', 'pcDistPlan', 'pcTssPlan', 'pcIfPlan'].forEach((id) => {
+      const hasCompleted = completedDurationMin > 0 || completedDistanceM > 0 || completedTss > 0 || payload.source === 'strava';
+      document.querySelectorAll('.feel-btn').forEach((btn) => { btn.disabled = !hasCompleted; });
+      document.getElementById('wvRpe').disabled = !hasCompleted;
+      updateRpeLabel();
+
+      document.getElementById('wvHeaderDuration').textContent = completedDurationMin ? formatDurationClock(completedDurationMin) : '--:--:--';
+      document.getElementById('wvHeaderDistance').textContent = completedDistanceM ? fmtDistanceMeters(completedDistanceM) : '--';
+      document.getElementById('wvHeaderTss').textContent = completedTss ? `${Math.round(completedTss)} TSS` : '-- TSS';
+
+      ['pcDurComp', 'pcDistComp', 'pcElevComp', 'pcTssComp', 'pcIfComp', 'pcDurPlan', 'pcDistPlan', 'pcElevPlan', 'pcTssPlan', 'pcIfPlan'].forEach((id) => {
         const el = document.getElementById(id);
-        el.readOnly = false;
-        el.classList.toggle('muted', !el.value || el.value === '--');
+        el.classList.toggle('muted', !el.value);
         el.oninput = () => el.classList.toggle('muted', !el.value);
       });
-      if (canEditCompleted) {
-        const target = parentPlanned || data;
-        let timer = null;
-        const parseDur = (text) => {
-          if (!text) return 0;
-          if (text.includes(':')) {
-            const parts = text.split(':').map(n => Number(n || 0));
-            if (parts.length === 2) return parts[0] * 60 + parts[1];
-            if (parts.length === 3) return parts[0] * 60 + parts[1] + (parts[2] / 60);
-          }
-          return Number(text || 0);
-        };
-        const recalc = () => {
-          const durCompH = parseDur(document.getElementById('pcDurComp').value) / 60;
-          const tssComp = Number(document.getElementById('pcTssComp').value || 0);
-          const ifComp = Number(document.getElementById('pcIfComp').value || 0);
-          if (durCompH > 0) {
-            if (ifComp > 0) {
-              document.getElementById('pcTssComp').value = (durCompH * ifComp * ifComp * 100).toFixed(1);
-            } else if (tssComp > 0) {
-              document.getElementById('pcIfComp').value = Math.sqrt(tssComp / (durCompH * 100)).toFixed(2);
-            }
-          }
-          const durPlanH = parseDur(document.getElementById('pcDurPlan').value) / 60;
-          const tssPlan = Number(document.getElementById('pcTssPlan').value || 0);
-          const ifPlan = Number(document.getElementById('pcIfPlan').value || 0);
-          if (durPlanH > 0) {
-            if (ifPlan > 0) {
-              document.getElementById('pcTssPlan').value = (durPlanH * ifPlan * ifPlan * 100).toFixed(1);
-            } else if (tssPlan > 0) {
-              document.getElementById('pcIfPlan').value = Math.sqrt(tssPlan / (durPlanH * 100)).toFixed(2);
-            }
-          }
-        };
-        const save = () => {
-          clearTimeout(timer);
-          recalc();
-          timer = setTimeout(async () => {
-            await fetch(`/calendar-items/${target.id}/completed`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                completed_duration_min: parseDur(document.getElementById('pcDurComp').value),
-                completed_distance_km: fromDisplayDistanceToKm(document.getElementById('pcDistComp').value),
-                completed_tss: Number(document.getElementById('pcTssComp').value || 0),
-                completed_if: Number(document.getElementById('pcIfComp').value || 0),
-              }),
-            });
-            await loadData(false);
-          }, 250);
-        };
-        document.getElementById('pcDurComp').onchange = save;
-        document.getElementById('pcDistComp').onchange = save;
-        document.getElementById('pcTssComp').onchange = save;
-        document.getElementById('pcIfComp').onchange = save;
-      }
+
+      const syncDistanceUnits = (nextUnit) => {
+        const planMeters = fromDisplayDistanceToMeters(document.getElementById('pcDistPlan').value, distanceUnitLocal);
+        const compMeters = fromDisplayDistanceToMeters(document.getElementById('pcDistComp').value, distanceUnitLocal);
+        distanceUnitLocal = nextUnit;
+        const nextPlan = toDisplayDistanceFromMeters(planMeters, nextUnit);
+        const nextComp = toDisplayDistanceFromMeters(compMeters, nextUnit);
+        document.getElementById('pcDistPlan').value = planMeters > 0 ? nextPlan.value.toFixed(nextUnit === 'm' ? 0 : 1) : '';
+        document.getElementById('pcDistComp').value = compMeters > 0 ? nextComp.value.toFixed(nextUnit === 'm' ? 0 : 1) : '';
+      };
+      const syncElevationUnits = (nextUnit) => {
+        const planMeters = fromDisplayElevationToMeters(document.getElementById('pcElevPlan').value, elevationUnitLocal);
+        const compMeters = fromDisplayElevationToMeters(document.getElementById('pcElevComp').value, elevationUnitLocal);
+        elevationUnitLocal = nextUnit;
+        const nextPlan = toDisplayElevationFromMeters(planMeters, nextUnit);
+        const nextComp = toDisplayElevationFromMeters(compMeters, nextUnit);
+        document.getElementById('pcElevPlan').value = planMeters > 0 ? nextPlan.value.toFixed(nextUnit === 'm' ? 0 : 1) : '';
+        document.getElementById('pcElevComp').value = compMeters > 0 ? nextComp.value.toFixed(nextUnit === 'm' ? 0 : 1) : '';
+      };
+      document.getElementById('pcDistanceUnit').onchange = (ev) => syncDistanceUnits(ev.target.value);
+      document.getElementById('pcElevationUnit').onchange = (ev) => syncElevationUnits(ev.target.value);
+      ['pcDurPlan', 'pcDurComp', 'pcTssPlan', 'pcTssComp', 'pcIfPlan', 'pcIfComp'].forEach((id) => {
+        document.getElementById(id).onchange = recalcIfTssRows;
+      });
+      document.getElementById('wvSportSelect').onchange = (ev) => {
+        document.getElementById('wvSportIcon').innerHTML = toSportIcon(ev.target.value);
+      };
     }
 
     async function renderWorkoutAnalyze(payload) {
@@ -3625,177 +4166,143 @@ def page() -> str:
       const pairByPlannedId = new Map(pairs.map(p => [String(p.planned_id), p]));
       const pairByStravaId = new Map(pairs.map(p => [String(p.strava_id), p]));
       const now = new Date();
-      const currentMonthKey = monthKey(now.getFullYear(), now.getMonth());
       const wrap = document.getElementById('calendarScroll');
       wrap.innerHTML = '';
+      const y = calendarCursor.getFullYear();
+      const m = calendarCursor.getMonth();
+      const currentMonthKey = monthKey(now.getFullYear(), now.getMonth());
+      const selectedMonthKey = monthKey(y, m);
 
-      for (let offset = -6; offset <= 9; offset += 1) {
-        const base = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-        const y = base.getFullYear();
-        const m = base.getMonth();
-        const daysInMonth = new Date(y, m + 1, 0).getDate();
-        const firstDayJs = new Date(y, m, 1).getDay();
-        const firstDayMon = (firstDayJs + 6) % 7;
+      const select = document.getElementById('calMonthSelect');
+      const monthOptions = [];
+      for (let offset = -18; offset <= 18; offset += 1) {
+        const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+        const key = monthKey(d.getFullYear(), d.getMonth());
+        monthOptions.push(`<option value="${key}">${d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</option>`);
+      }
+      select.innerHTML = monthOptions.join('');
+      select.value = selectedMonthKey;
 
-        const month = document.createElement('section');
-        month.className = 'month';
-        month.dataset.month = monthKey(y, m);
-        if (month.dataset.month === currentMonthKey) month.classList.add('current-month');
+      const daysInMonth = new Date(y, m + 1, 0).getDate();
+      const firstDayJs = new Date(y, m, 1).getDay();
+      const firstDayMon = (firstDayJs + 6) % 7;
 
-        const title = document.createElement('h4');
-        title.className = 'month-title';
-        title.textContent = base.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-        month.appendChild(title);
+      const month = document.createElement('section');
+      month.className = 'month';
+      month.dataset.month = selectedMonthKey;
+      if (selectedMonthKey === currentMonthKey) month.classList.add('current-month');
 
-        const dow = document.createElement('div');
-        dow.className = 'dow';
-        DOW.forEach(d => {
-          const el = document.createElement('span');
-          el.textContent = d;
-          dow.appendChild(el);
-        });
-        const sumHead = document.createElement('span');
-        sumHead.className = 'sum-head';
-        sumHead.textContent = 'Week Summary';
-        dow.appendChild(sumHead);
-        month.appendChild(dow);
+      const dow = document.createElement('div');
+      dow.className = 'dow';
+      DOW.forEach(d => {
+        const el = document.createElement('span');
+        el.textContent = d;
+        dow.appendChild(el);
+      });
+      const sumHead = document.createElement('span');
+      sumHead.className = 'sum-head';
+      sumHead.textContent = 'Week Summary';
+      dow.appendChild(sumHead);
+      month.appendChild(dow);
 
-        const totalSlots = Math.ceil((firstDayMon + daysInMonth) / 7) * 7;
-        let cursorDay = 1;
+      const totalSlots = Math.ceil((firstDayMon + daysInMonth) / 7) * 7;
+      let cursorDay = 1;
 
-        for (let slot = 0; slot < totalSlots; slot += 7) {
-          const row = document.createElement('div');
-          row.className = 'week-row';
-          const weekDateKeys = [];
+      for (let slot = 0; slot < totalSlots; slot += 7) {
+        const row = document.createElement('div');
+        row.className = 'week-row';
+        const weekDateKeys = [];
 
-          for (let col = 0; col < 7; col += 1) {
-            const globalIndex = slot + col;
-            const dayNum = globalIndex >= firstDayMon && cursorDay <= daysInMonth ? cursorDay : null;
+        for (let col = 0; col < 7; col += 1) {
+          const globalIndex = slot + col;
+          const dayNum = globalIndex >= firstDayMon && cursorDay <= daysInMonth ? cursorDay : null;
 
-            if (dayNum) {
-              const key = `${y}-${String(m + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
-              weekDateKeys.push(key);
+          if (dayNum) {
+            const key = `${y}-${String(m + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+            weekDateKeys.push(key);
 
-              const cell = document.createElement('div');
-              cell.className = 'day';
-              if (key === todayKey()) cell.classList.add('today');
+            const cell = document.createElement('div');
+            cell.className = 'day';
+            if (key === todayKey()) cell.classList.add('today');
 
-              const num = document.createElement('span');
-              num.className = 'd-num';
-              num.textContent = String(dayNum);
-              cell.appendChild(num);
+            const num = document.createElement('span');
+            num.className = 'd-num';
+            num.textContent = String(dayNum);
+            cell.appendChild(num);
 
-              const entries = dayMap[key] || { done: [], items: [] };
+            const entries = dayMap[key] || { done: [], items: [] };
+            const shownCompleted = new Set();
+            const cardsToShow = [];
 
-              const shownCompleted = new Set();
-              const cardsToShow = [];
+            entries.items.forEach(item => {
+              if (item.kind !== 'workout') {
+                cardsToShow.push({ kind: 'other', item });
+                return;
+              }
+              const pair = pairByPlannedId.get(String(item.id));
+              const completed = pair ? stravaById.get(String(pair.strava_id)) : completedFromPlanned(item);
+              if (completed) shownCompleted.add(String(completed.id));
+              cardsToShow.push({ kind: 'planned', item, completed, pair, fromPair: !!pair });
+            });
 
-              entries.items.forEach(item => {
-                if (item.kind !== 'workout') {
-                  cardsToShow.push({ kind: 'other', item });
-                  return;
-                }
-                const pair = pairByPlannedId.get(String(item.id));
-                const completed = pair ? stravaById.get(String(pair.strava_id)) : completedFromPlanned(item);
-                if (completed) shownCompleted.add(String(completed.id));
-                cardsToShow.push({ kind: 'planned', item, completed, pair, fromPair: !!pair });
-              });
+            entries.done.forEach(a => {
+              if (!shownCompleted.has(String(a.id))) {
+                const pair = pairByStravaId.get(String(a.id));
+                cardsToShow.push({ kind: 'completed', completed: a, pair });
+              }
+            });
 
-              entries.done.forEach(a => {
-                if (!shownCompleted.has(String(a.id))) {
-                  const pair = pairByStravaId.get(String(a.id));
-                  cardsToShow.push({ kind: 'completed', completed: a, pair });
-                }
-              });
-
-              cardsToShow.slice(0, 3).forEach((entry) => {
-                if (entry.kind === 'other') {
-                  const item = entry.item;
-                  const card = document.createElement('div');
-                  card.className = `work-card ${item.kind}`;
-                  card.innerHTML = `
-                    <button class="card-menu-btn" type="button">&#8942;</button>
-                    <p class="wc-title">${item.title || item.kind.toUpperCase()}</p>
-                    <p class="wc-meta">${item.kind.toUpperCase()} • ${item.date}</p>
-                  `;
-                  card.addEventListener('click', (ev) => {
-                    ev.stopPropagation();
-                    selectedKind = item.kind;
-                    selectedDate = item.date;
-                    selectedWorkoutType = item.workout_type || 'Other';
-                    openDetailModal(item);
-                  });
-                  card.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'planned', data: item }));
-                  card.querySelector('.card-menu-btn').addEventListener('click', (ev) => showItemMenu(ev, { source: 'planned', data: item }));
-                  cell.appendChild(card);
-                  return;
-                }
-
-                if (entry.kind === 'planned') {
-                  const item = entry.item;
-                  const completed = entry.completed;
-                  const comp = complianceStatus(item, completed, key);
-                  const status = comp.cls;
-                  const card = document.createElement('div');
-                  card.className = `work-card ${status}`;
-                  const pIf = plannedIF(item);
-                  const plannedLine = `P ${Number(item.duration_min || 0)}m • ${itemToTss(item).toFixed ? itemToTss(item).toFixed(0) : itemToTss(item)} TSS${pIf ? ` • IF ${Number(pIf).toFixed(2)}` : ''}`;
-                  const cIf = completed ? completedIF(completed) : null;
-                  const completedLine = completed
-                    ? `C ${formatDurationMin(Number(completed.moving_time || 0) / 60)} • ${Math.round(Number(completed.tss_override || 0) || activityToTss(completed))} TSS${cIf ? ` • IF ${Number(cIf).toFixed(2)}` : ''}`
-                    : 'C --';
-                  const feedback = completed && (Number(item.feel || 0) > 0 || Number(item.rpe || 0) > 0)
-                    ? `${feelEmoji(item.feel)}${Number(item.rpe || 0) > 0 ? ` RPE ${item.rpe}` : ''}`
-                    : '';
-                  const arrow = comp.arrow === 'up' ? '<span class="delta-up">↑</span>' : comp.arrow === 'down' ? '<span class="delta-down">↓</span>' : '';
-                  card.innerHTML = `
-                    <button class="card-menu-btn" type="button">&#8942;</button>
-                    <p class="wc-title">${cardIcon(item.workout_type)}${item.title || (item.workout_type || 'Workout')}</p>
-                    <p class="wc-meta">${item.workout_type || 'Workout'} • ${plannedLine}</p>
-                    <p class="wc-meta">${completedLine} ${arrow} ${feedback}</p>
-                  `;
-                  card.draggable = true;
-                  card.dataset.kind = 'planned';
-                  card.dataset.plannedId = String(item.id);
-                  card.addEventListener('dragstart', (ev) => {
-                    ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'planned', id: String(item.id) }));
-                  });
-                  card.addEventListener('dragover', (ev) => ev.preventDefault());
-                  card.addEventListener('drop', async (ev) => {
-                    ev.preventDefault();
-                    const raw = ev.dataTransfer.getData('text/plain');
-                    if (!raw) return;
-                    const data = JSON.parse(raw);
-                    if (data.source === 'strava') {
-                      await pairWorkouts(String(item.id), String(data.id));
-                    }
-                  });
-                  card.addEventListener('click', (ev) => {
-                    ev.stopPropagation();
-                    const source = entry.fromPair && completed ? 'strava' : 'planned';
-                    openWorkoutModal({ source, data: source === 'strava' ? completed : item, planned: item, pair: entry.pair });
-                  });
-                  card.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'planned', data: item }));
-                  card.querySelector('.card-menu-btn').addEventListener('click', (ev) => showItemMenu(ev, { source: 'planned', data: item }));
-                  cell.appendChild(card);
-                  return;
-                }
-
-                const a = entry.completed;
-                const pairedPlanned = entry.pair ? plannedById.get(String(entry.pair.planned_id)) : null;
-                const compStat = pairedPlanned ? complianceStatus(pairedPlanned, a, key).cls : 'unplanned';
+            cardsToShow.slice(0, 6).forEach((entry) => {
+              if (entry.kind === 'other') {
+                const item = entry.item;
                 const card = document.createElement('div');
-                card.className = `work-card ${compStat}`;
+                card.className = `work-card ${item.kind}`;
                 card.innerHTML = `
                   <button class="card-menu-btn" type="button">&#8942;</button>
-                  <p class="wc-title">${cardIcon(a.type)}${a.name || 'Completed Workout'}</p>
-                  <p class="wc-meta">${a.type || 'Workout'} • ${formatDurationMin(Number(a.moving_time || 0) / 60)} • ${activityToTss(a).toFixed ? activityToTss(a).toFixed(0) : activityToTss(a)} TSS${activityIF(a) ? ` • IF ${Number(activityIF(a)).toFixed(2)}` : ''} ${feelEmoji(a.feel)} ${Number(a.rpe || 0) > 0 ? `RPE ${a.rpe}` : ''}</p>
+                  <p class="wc-title">${item.title || item.kind.toUpperCase()}</p>
+                  <p class="wc-meta">${item.kind.toUpperCase()} • ${item.date}</p>
+                `;
+                card.addEventListener('click', (ev) => {
+                  ev.stopPropagation();
+                  selectedKind = item.kind;
+                  selectedDate = item.date;
+                  selectedWorkoutType = item.workout_type || 'Other';
+                  openDetailModal(item);
+                });
+                card.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'planned', data: item }));
+                card.querySelector('.card-menu-btn').addEventListener('click', (ev) => showItemMenu(ev, { source: 'planned', data: item }));
+                cell.appendChild(card);
+                return;
+              }
+
+              if (entry.kind === 'planned') {
+                const item = entry.item;
+                const completed = entry.completed;
+                const comp = complianceStatus(item, completed, key);
+                const status = comp.cls;
+                const card = document.createElement('div');
+                card.className = `work-card ${status}`;
+                const cIf = completed ? completedIF(completed) : null;
+                const distM = completed ? Number(completed.distance || 0) : Number(item.completed_distance_m || 0);
+                const unitForCard = String(item.distance_unit || distanceUnit || 'km');
+                const durMin = completed ? Number(completed.moving_time || 0) / 60 : Number(item.completed_duration_min || 0);
+                const tssVal = completed ? Math.round(Number(completed.tss_override || 0) || activityToTss(completed)) : Math.round(Number(item.completed_tss || 0));
+                const cTime = completed ? formatStartClock(completed.start_date_local) : '--:--';
+                const arrow = comp.arrow === 'up' ? '<span class="delta-up">↑</span>' : comp.arrow === 'down' ? '<span class="delta-down">↓</span>' : '';
+                const feedCount = commentCount(item) || commentCount(completed);
+                const feedback = `${feelEmoji(item.feel)} ${Number(item.rpe || 0) > 0 ? `RPE ${item.rpe}` : ''}`.trim();
+                card.innerHTML = `
+                  <button class="card-menu-btn" type="button">&#8942;</button>
+                  <p class="wc-title">${cardIcon(item.workout_type)}${item.title || (item.workout_type || 'Workout')}</p>
+                  <p class="wc-meta">${durMin ? formatDurationMin(durMin) : '--'} • ${distM ? fmtDistanceMetersInUnit(distM, unitForCard) : '--'} • ${tssVal || '--'} TSS ${cIf ? `• IF ${Number(cIf).toFixed(2)}` : ''}</p>
+                  <p class="wc-meta">C ${cTime} ${arrow}</p>
+                  <div class="wc-bottom"><span>${feedback || '&nbsp;'}</span><span>💬 ${feedCount}</span></div>
                 `;
                 card.draggable = true;
-                card.dataset.kind = 'strava';
-                card.dataset.stravaId = String(a.id);
+                card.dataset.kind = 'planned';
+                card.dataset.plannedId = String(item.id);
                 card.addEventListener('dragstart', (ev) => {
-                  ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'strava', id: String(a.id) }));
+                  ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'planned', id: String(item.id) }));
                 });
                 card.addEventListener('dragover', (ev) => ev.preventDefault());
                 card.addEventListener('drop', async (ev) => {
@@ -3803,79 +4310,109 @@ def page() -> str:
                   const raw = ev.dataTransfer.getData('text/plain');
                   if (!raw) return;
                   const data = JSON.parse(raw);
-                  if (data.source === 'planned') {
-                    await pairWorkouts(String(data.id), String(a.id));
-                  }
+                  if (data.source === 'strava') await pairWorkouts(String(item.id), String(data.id));
                 });
                 card.addEventListener('click', (ev) => {
                   ev.stopPropagation();
-                  openWorkoutModal({ source: 'strava', data: a, pair: entry.pair });
+                  const source = entry.fromPair && completed ? 'strava' : 'planned';
+                  openWorkoutModal({ source, data: source === 'strava' ? completed : item, planned: item, pair: entry.pair });
                 });
-                card.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'strava', data: a }));
-                card.querySelector('.card-menu-btn').addEventListener('click', (ev) => showItemMenu(ev, { source: 'strava', data: a }));
+                card.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'planned', data: item }));
+                card.querySelector('.card-menu-btn').addEventListener('click', (ev) => showItemMenu(ev, { source: 'planned', data: item }));
                 cell.appendChild(card);
-              });
-
-              const allCount = cardsToShow.length;
-              if (allCount > 3) {
-                const more = document.createElement('span');
-                more.className = 'item';
-                more.style.background = '#edf3fb';
-                more.style.color = '#5c7898';
-                more.textContent = `+${allCount - 3} more`;
-                cell.appendChild(more);
+                return;
               }
 
-              const addBar = document.createElement('button');
-              addBar.type = 'button';
-              addBar.className = 'quick-add';
-              addBar.textContent = '+';
-              addBar.title = 'Add item';
-              addBar.addEventListener('click', (ev) => {
-                ev.stopPropagation();
-                openActionModal(key);
+              const a = entry.completed;
+              const pairedPlanned = entry.pair ? plannedById.get(String(entry.pair.planned_id)) : null;
+              const compStat = pairedPlanned ? complianceStatus(pairedPlanned, a, key).cls : 'unplanned';
+              const unitForCard = String((pairedPlanned && pairedPlanned.distance_unit) || a.distance_unit || distanceUnit || 'km');
+              const card = document.createElement('div');
+              card.className = `work-card ${compStat}`;
+              const feedCount = commentCount(a);
+              card.innerHTML = `
+                <button class="card-menu-btn" type="button">&#8942;</button>
+                <p class="wc-title">${cardIcon(a.type)}${a.name || 'Completed Workout'}</p>
+                <p class="wc-meta">${formatDurationMin(Number(a.moving_time || 0) / 60)} • ${fmtDistanceMetersInUnit(Number(a.distance || 0), unitForCard)} • ${Math.round(activityToTss(a))} TSS</p>
+                <p class="wc-meta">C ${formatStartClock(a.start_date_local)} ${activityIF(a) ? `• IF ${Number(activityIF(a)).toFixed(2)}` : ''}</p>
+                <div class="wc-bottom"><span>${feelEmoji(a.feel)} ${Number(a.rpe || 0) > 0 ? `RPE ${a.rpe}` : ''}</span><span>💬 ${feedCount}</span></div>
+              `;
+              card.draggable = true;
+              card.dataset.kind = 'strava';
+              card.dataset.stravaId = String(a.id);
+              card.addEventListener('dragstart', (ev) => {
+                ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'strava', id: String(a.id) }));
               });
-              cell.appendChild(addBar);
+              card.addEventListener('dragover', (ev) => ev.preventDefault());
+              card.addEventListener('drop', async (ev) => {
+                ev.preventDefault();
+                const raw = ev.dataTransfer.getData('text/plain');
+                if (!raw) return;
+                const data = JSON.parse(raw);
+                if (data.source === 'planned') await pairWorkouts(String(data.id), String(a.id));
+              });
+              card.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                openWorkoutModal({ source: 'strava', data: a, pair: entry.pair });
+              });
+              card.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'strava', data: a }));
+              card.querySelector('.card-menu-btn').addEventListener('click', (ev) => showItemMenu(ev, { source: 'strava', data: a }));
+              cell.appendChild(card);
+            });
 
-              row.appendChild(cell);
-              cursorDay += 1;
-            } else {
-              weekDateKeys.push(null);
-              const empty = document.createElement('div');
-              empty.className = 'day empty';
-              row.appendChild(empty);
+            if (cardsToShow.length > 6) {
+              const more = document.createElement('span');
+              more.className = 'item';
+              more.style.background = '#edf3fb';
+              more.style.color = '#5c7898';
+              more.textContent = `+${cardsToShow.length - 6} more`;
+              cell.appendChild(more);
             }
-          }
 
-          const week = getWeekMetrics(weekDateKeys, dayMap);
-          const weekCard = document.createElement('div');
-          weekCard.className = 'week-summary';
-          weekCard.innerHTML = `
-            <div class="ws-metrics">
-              <div class="ws-chip ws-ctl"><strong>${week.ctl}</strong>CTL</div>
-              <div class="ws-chip ws-atl"><strong>${week.atl}</strong>ATL</div>
-              <div class="ws-chip ws-tsb"><strong>${week.tsb > 0 ? '+' + week.tsb : week.tsb}</strong>TSB</div>
-            </div>
-            <div class="ws-row"><span>Total Duration</span><strong>${week.durationLabel}</strong></div>
-            <div class="ws-row"><span>Total TSS</span><strong>${week.tss}</strong></div>
-          `;
-          row.appendChild(weekCard);
-          month.appendChild(row);
+            const addBar = document.createElement('button');
+            addBar.type = 'button';
+            addBar.className = 'quick-add';
+            addBar.textContent = '+';
+            addBar.title = 'Add item';
+            addBar.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              openActionModal(key);
+            });
+            cell.appendChild(addBar);
+
+            row.appendChild(cell);
+            cursorDay += 1;
+          } else {
+            weekDateKeys.push(null);
+            const empty = document.createElement('div');
+            empty.className = 'day empty';
+            row.appendChild(empty);
+          }
         }
 
-        wrap.appendChild(month);
+        const week = getWeekMetrics(weekDateKeys, dayMap);
+        const weekCard = document.createElement('div');
+        weekCard.className = 'week-summary';
+        weekCard.innerHTML = `
+          <div class="ws-metrics">
+            <div class="ws-chip ws-ctl"><strong>${week.ctl}</strong>CTL</div>
+            <div class="ws-chip ws-atl"><strong>${week.atl}</strong>ATL</div>
+            <div class="ws-chip ws-tsb"><strong>${week.tsb > 0 ? '+' + week.tsb : week.tsb}</strong>TSB</div>
+          </div>
+          <div class="ws-row"><span>Total Duration</span><strong>${week.durationLabel}</strong></div>
+          <div class="ws-row"><span>Total TSS</span><strong>${week.tss}</strong></div>
+        `;
+        row.appendChild(weekCard);
+        month.appendChild(row);
       }
 
-      if (!initialMonthCentered) {
-        jumpToCurrentMonth();
-        initialMonthCentered = true;
-      }
+      wrap.appendChild(month);
     }
 
     function jumpToCurrentMonth() {
-      const wrap = document.getElementById('calendarScroll');
-      const current = wrap.querySelector('.current-month');
-      if (current) wrap.scrollTop = current.offsetTop - 7;
+      const now = new Date();
+      calendarCursor = new Date(now.getFullYear(), now.getMonth(), 1);
+      renderCalendar();
     }
 
     function renderDashboard() {
@@ -3957,25 +4494,20 @@ def page() -> str:
       btn.addEventListener('click', () => setView(btn.dataset.view));
     });
 
-    document.getElementById('jumpToday').addEventListener('click', jumpToCurrentMonth);
-    document.getElementById('distanceUnitBtn').addEventListener('click', () => {
-      distanceUnit = distanceUnit === 'km' ? 'mi' : distanceUnit === 'mi' ? 'm' : 'km';
-      localStorage.setItem('distanceUnit', distanceUnit);
-      appSettings.units = appSettings.units || {};
-      appSettings.units.distance = distanceUnit;
-      updateUnitButtons();
-      renderHome();
+    document.getElementById('calTodayBtn').addEventListener('click', jumpToCurrentMonth);
+    document.getElementById('calPrevMonth').addEventListener('click', () => {
+      calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1);
       renderCalendar();
     });
-    document.getElementById('elevationUnitBtn').addEventListener('click', () => {
-      elevationUnit = elevationUnit === 'm' ? 'ft' : 'm';
-      localStorage.setItem('elevationUnit', elevationUnit);
-      appSettings.units = appSettings.units || {};
-      appSettings.units.elevation = elevationUnit;
-      updateUnitButtons();
-      if (!document.getElementById('wvAnalyze').classList.contains('hidden') && window.currentWorkoutPayload) {
-        renderWorkoutAnalyze(window.currentWorkoutPayload);
-      }
+    document.getElementById('calNextMonth').addEventListener('click', () => {
+      calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 1);
+      renderCalendar();
+    });
+    document.getElementById('calMonthSelect').addEventListener('change', (ev) => {
+      const [yy, mm] = String(ev.target.value || '').split('-').map((x) => Number(x));
+      if (!yy || !mm) return;
+      calendarCursor = new Date(yy, mm - 1, 1);
+      renderCalendar();
     });
     document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
       const read = (id) => {
@@ -3983,7 +4515,10 @@ def page() -> str:
         return v ? Number(v) : null;
       };
       const payload = {
-        units: { distance: distanceUnit, elevation: elevationUnit },
+        units: {
+          distance: (appSettings.units && appSettings.units.distance) || distanceUnit || 'km',
+          elevation: (appSettings.units && appSettings.units.elevation) || elevationUnit || 'm',
+        },
         ftp: {
           ride: read('ftpRide'),
           run: read('ftpRun'),
@@ -4006,29 +4541,59 @@ def page() -> str:
       await loadData(false);
     });
     document.getElementById('uploadFitBtn').addEventListener('click', () => {
+      fitUploadContext = 'global';
+      fitUploadTargetActivityId = null;
       document.getElementById('uploadFitInput').click();
     });
     document.getElementById('uploadFitInput').addEventListener('change', async (event) => {
       const input = event.target;
       const file = input.files && input.files[0];
       if (!file) return;
-      const resp = await fetch(`/import-fit?filename=${encodeURIComponent(file.name)}`, {
+      input.value = '';
+      if (fitUploadContext === 'modal') {
+        if (modalDraft) {
+          modalDraft.pendingUploadFile = file;
+          modalDraft.pendingUploadName = file.name;
+          renderWorkoutFiles(window.currentWorkoutPayload || { data: {} });
+        }
+        fitUploadTargetActivityId = null;
+        fitUploadContext = 'global';
+        return;
+      }
+      const endpoint = fitUploadTargetActivityId
+        ? `/activities/${encodeURIComponent(fitUploadTargetActivityId)}/fit/upload?filename=${encodeURIComponent(file.name)}`
+        : `/import-fit?filename=${encodeURIComponent(file.name)}`;
+      const resp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: file,
       });
-      input.value = '';
       if (!resp.ok) {
         const err = await resp.text();
         alert(`Import failed: ${err}`);
+        fitUploadTargetActivityId = null;
+        fitUploadContext = 'global';
         return;
       }
+      const uploaded = await resp.json();
+      if (fitUploadTargetActivityId && window.currentWorkoutPayload && window.currentWorkoutPayload.data) {
+        window.currentWorkoutPayload = { ...window.currentWorkoutPayload, data: uploaded };
+        renderWorkoutFiles(window.currentWorkoutPayload);
+        renderWorkoutSummary(window.currentWorkoutPayload);
+        await renderWorkoutAnalyze(window.currentWorkoutPayload);
+      }
+      fitUploadTargetActivityId = null;
+      fitUploadContext = 'global';
       await loadData(false);
     });
     document.getElementById('globalSettings').addEventListener('click', () => {
-      openContextMenu(16, 64, [
-        { label: 'Settings (coming next)', onClick: async () => {} },
-      ]);
+      document.getElementById('settingsModal').classList.add('open');
+    });
+    document.getElementById('closeSettings').addEventListener('click', () => {
+      document.getElementById('settingsModal').classList.remove('open');
+    });
+    document.getElementById('settingsModal').addEventListener('click', (event) => {
+      if (event.target.id === 'settingsModal') document.getElementById('settingsModal').classList.remove('open');
     });
     document.getElementById('addEventBtn').addEventListener('click', () => openActionModal(todayKey(), 'event'));
     document.getElementById('addGoalBtn').addEventListener('click', () => openActionModal(todayKey(), 'goal'));
@@ -4048,7 +4613,8 @@ def page() -> str:
 
     document.getElementById('closeWorkoutView').addEventListener('click', closeWorkoutModal);
     document.getElementById('cancelWorkoutView').addEventListener('click', closeWorkoutModal);
-    document.getElementById('saveCloseWorkoutView').addEventListener('click', saveWorkoutViewAndClose);
+    document.getElementById('saveWorkoutView').addEventListener('click', () => saveWorkoutView(false));
+    document.getElementById('saveCloseWorkoutView').addEventListener('click', () => saveWorkoutView(true));
     document.getElementById('deleteWorkoutView').addEventListener('click', async () => {
       const payload = window.currentWorkoutPayload;
       if (!payload) return;
@@ -4062,17 +4628,43 @@ def page() -> str:
       closeWorkoutModal();
       await loadData(false);
     });
+    document.getElementById('wvBrowseFilesBtn').addEventListener('click', () => {
+      const payload = window.currentWorkoutPayload;
+      if (!payload) return;
+      fitUploadContext = 'modal';
+      fitUploadTargetActivityId = payload.source === 'strava' ? payload.data.id : null;
+      document.getElementById('uploadFitInput').click();
+    });
+    document.getElementById('wvFilesTabBtn').addEventListener('click', () => setWorkoutMode(false));
+    document.getElementById('wvAnalyzeToggleBtn').addEventListener('click', () => {
+      const toggle = document.getElementById('wvAnalyzeToggleBtn');
+      const toAnalyze = toggle.textContent === 'Analyze';
+      setWorkoutMode(toAnalyze);
+    });
     document.querySelectorAll('.feel-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         if (btn.disabled) return;
         setFeelValue(btn.dataset.feel);
       });
     });
+    document.getElementById('wvRpe').addEventListener('input', updateRpeLabel);
+    document.getElementById('wvPostCommentBtn').addEventListener('click', () => {
+      const input = document.getElementById('wvCommentInput');
+      const txt = String(input.value || '').trim();
+      if (!txt || !modalDraft) return;
+      modalDraft.commentsFeed = modalDraft.commentsFeed || [];
+      modalDraft.commentsFeed.push(txt);
+      input.value = '';
+      renderCommentsFeed();
+    });
+    document.getElementById('wvCommentInput').addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        document.getElementById('wvPostCommentBtn').click();
+      }
+    });
     document.getElementById('workoutViewModal').addEventListener('click', (event) => {
       if (event.target.id === 'workoutViewModal') closeWorkoutModal();
-    });
-    document.querySelectorAll('.wv-tab[data-wv-tab]').forEach(btn => {
-      btn.addEventListener('click', () => switchWorkoutTab(btn.dataset.wvTab));
     });
     document.getElementById('contextMenu').addEventListener('click', (ev) => ev.stopPropagation());
     document.addEventListener('click', (ev) => {
@@ -4197,7 +4789,9 @@ def ui_activities() -> list[dict[str, Any]]:
             updated["start_date_local"] = f"{override['date']}{time_part}"
         if "title" in override:
             updated["name"] = str(override["title"])
-        for k in ["description", "comments", "feel", "rpe", "tss_override"]:
+        if "type" in override:
+            updated["type"] = str(override["type"])
+        for k in ["description", "comments", "comments_feed", "feel", "rpe", "tss_override", "if_value"]:
             if k in override:
                 updated[k] = override[k]
         if override.get("hidden"):
@@ -4261,28 +4855,18 @@ async def import_fit(request: Request, filename: str = Query(default="workout.fi
 
     safe_name = Path(filename).name
     name = Path(safe_name).stem.replace("_", " ").replace("-", " ").strip() or "Imported Workout"
-    summary = parsed.get("summary", {})
-    start_iso = str(summary.get("start") or f"{date.today().isoformat()}T08:00:00")
-    distance_m = float(summary.get("distance_m") or 0)
-    duration_s = float(summary.get("duration_s") or 0)
-    sport = str(summary.get("sport") or "Ride").title()
-    if_value = summary.get("if")
-    tss_value = summary.get("tss")
     item = {
         "id": f"imported-{file_id}",
         "name": name.title(),
-        "type": sport,
-        "distance": distance_m,
-        "moving_time": duration_s,
-        "start_date_local": start_iso,
+        "type": "Ride",
+        "distance": 0,
+        "moving_time": 0,
+        "start_date_local": f"{date.today().isoformat()}T08:00:00",
         "description": f"Imported from {safe_name}",
         "source": "fit",
         "fit_id": file_id,
-        "if_value": if_value,
-        "tss_override": tss_value,
-        "avg_power": summary.get("avg_power"),
-        "avg_hr": summary.get("avg_hr"),
     }
+    item = apply_parsed_fit_to_activity(item, parsed, file_id, safe_name)
     imported = load_imported_activities()
     imported.append(item)
     save_imported_activities(imported)
@@ -4294,6 +4878,100 @@ def get_fit_parsed(fit_id: str) -> dict[str, Any]:
     return load_fit_parsed(fit_id)
 
 
+@app.post("/activities/{activity_id}/fit/upload")
+async def upload_fit_for_activity(
+    activity_id: str, request: Request, filename: str = Query(default="workout.fit")
+) -> dict[str, Any]:
+    content = await request.body()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    if Path(filename).suffix.lower() != ".fit":
+        raise HTTPException(status_code=400, detail="Only .fit files are supported.")
+
+    imported = load_imported_activities()
+    idx = imported_activity_index(imported, activity_id)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Activity not found.")
+
+    file_id = str(uuid4())
+    imports_dir = Path("data/imports")
+    imports_dir.mkdir(parents=True, exist_ok=True)
+    (imports_dir / f"{file_id}.fit").write_bytes(content)
+    settings = load_settings()
+    parsed = parse_fit_bytes_to_json(content, settings=settings)
+    save_fit_parsed(file_id, parsed)
+
+    old_fit_id = str(imported[idx].get("fit_id") or "").strip()
+    if old_fit_id:
+        old_fit = imports_dir / f"{old_fit_id}.fit"
+        old_parsed = FIT_PARSED_DIR / f"{old_fit_id}.json"
+        if old_fit.exists():
+            old_fit.unlink()
+        if old_parsed.exists():
+            old_parsed.unlink()
+
+    imported[idx] = apply_parsed_fit_to_activity(imported[idx], parsed, file_id, filename)
+    save_imported_activities(imported)
+    return imported[idx]
+
+
+@app.post("/activities/{activity_id}/fit/recalculate")
+def recalculate_fit_for_activity(activity_id: str) -> dict[str, Any]:
+    imported = load_imported_activities()
+    idx = imported_activity_index(imported, activity_id)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Activity not found.")
+    fit_id = str(imported[idx].get("fit_id") or "").strip()
+    if not fit_id:
+        raise HTTPException(status_code=400, detail="No FIT attached.")
+    fit_path = Path("data/imports") / f"{fit_id}.fit"
+    if not fit_path.exists():
+        raise HTTPException(status_code=404, detail="FIT file missing.")
+
+    parsed = parse_fit_file_to_json(fit_path, settings=load_settings())
+    save_fit_parsed(fit_id, parsed)
+    filename = str(imported[idx].get("fit_filename") or f"{fit_id}.fit")
+    imported[idx] = apply_parsed_fit_to_activity(imported[idx], parsed, fit_id, filename)
+    save_imported_activities(imported)
+    return imported[idx]
+
+
+@app.delete("/activities/{activity_id}/fit")
+def delete_fit_for_activity(activity_id: str) -> dict[str, Any]:
+    imported = load_imported_activities()
+    idx = imported_activity_index(imported, activity_id)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Activity not found.")
+    fit_id = str(imported[idx].get("fit_id") or "").strip()
+    if fit_id:
+        parsed_path = FIT_PARSED_DIR / f"{fit_id}.json"
+        fit_path = Path("data/imports") / f"{fit_id}.fit"
+        if parsed_path.exists():
+            parsed_path.unlink()
+        if fit_path.exists():
+            fit_path.unlink()
+    for key in ["fit_id", "fit_filename", "if_value", "tss_override", "avg_power", "avg_hr"]:
+        imported[idx].pop(key, None)
+    save_imported_activities(imported)
+    return imported[idx]
+
+
+@app.get("/activities/{activity_id}/fit/download")
+def download_fit_for_activity(activity_id: str) -> FileResponse:
+    imported = load_imported_activities()
+    idx = imported_activity_index(imported, activity_id)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Activity not found.")
+    fit_id = str(imported[idx].get("fit_id") or "").strip()
+    if not fit_id:
+        raise HTTPException(status_code=404, detail="No FIT attached.")
+    fit_path = Path("data/imports") / f"{fit_id}.fit"
+    if not fit_path.exists():
+        raise HTTPException(status_code=404, detail="FIT file missing.")
+    filename = str(imported[idx].get("fit_filename") or f"{fit_id}.fit")
+    return FileResponse(path=str(fit_path), filename=filename, media_type="application/octet-stream")
+
+
 @app.put("/activities/{activity_id}/meta")
 def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, bool]:
     overrides = load_activity_overrides()
@@ -4302,6 +4980,14 @@ def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) 
         current["description"] = str(payload.get("description", ""))
     if "comments" in payload:
         current["comments"] = str(payload.get("comments", ""))
+    if "comments_feed" in payload:
+        raw_feed = payload.get("comments_feed")
+        if isinstance(raw_feed, list):
+            current["comments_feed"] = [str(x).strip() for x in raw_feed if str(x).strip()]
+    if "title" in payload:
+        current["title"] = str(payload.get("title", "")).strip()
+    if "type" in payload:
+        current["type"] = str(payload.get("type", "")).strip()
     if "feel" in payload:
         try:
             current["feel"] = max(0, min(5, int(payload.get("feel") or 0)))
@@ -4372,6 +5058,8 @@ def update_calendar_item_completed(item_id: str, payload: dict[str, Any] = Body(
 
     item["completed_duration_min"] = n(payload.get("completed_duration_min"))
     item["completed_distance_km"] = n(payload.get("completed_distance_km"))
+    item["completed_distance_m"] = n(payload.get("completed_distance_m")) or (item["completed_distance_km"] * 1000)
+    item["completed_elevation_m"] = n(payload.get("completed_elevation_m"))
     item["completed_tss"] = n(payload.get("completed_tss"))
     item["completed_if"] = n(payload.get("completed_if"))
     items[idx] = item
@@ -4476,6 +5164,7 @@ def get_planned_workouts() -> list[dict[str, Any]]:
             "completed_tss": i.get("completed_tss", 0),
             "completed_if": i.get("completed_if", 0),
             "comments": i.get("comments", ""),
+            "comments_feed": i.get("comments_feed", []),
             "feel": i.get("feel", 0),
             "rpe": i.get("rpe", 0),
             "description": i.get("description", ""),
@@ -4494,14 +5183,21 @@ def create_planned_workout(payload: dict[str, Any] = Body(...)) -> dict[str, Any
         "title": payload.get("title", "Untitled Workout"),
         "duration_min": payload.get("planned_duration_min", 0),
         "distance_km": payload.get("planned_distance_km", 0),
+        "distance_m": payload.get("planned_distance_m", payload.get("planned_distance_km", 0) * 1000),
+        "elevation_m": payload.get("planned_elevation_m", 0),
+        "distance_unit": payload.get("distance_unit", "km"),
+        "elevation_unit": payload.get("elevation_unit", "m"),
         "intensity": payload.get("planned_intensity", 6),
         "planned_if": payload.get("planned_if", 0),
         "planned_tss": payload.get("planned_tss", 0),
         "completed_duration_min": payload.get("completed_duration_min", 0),
         "completed_distance_km": payload.get("completed_distance_km", 0),
+        "completed_distance_m": payload.get("completed_distance_m", payload.get("completed_distance_km", 0) * 1000),
+        "completed_elevation_m": payload.get("completed_elevation_m", 0),
         "completed_tss": payload.get("completed_tss", 0),
         "completed_if": payload.get("completed_if", 0),
         "comments": payload.get("comments", ""),
+        "comments_feed": payload.get("comments_feed", []),
         "feel": payload.get("feel", 0),
         "rpe": payload.get("rpe", 0),
         "description": payload.get("description", ""),
