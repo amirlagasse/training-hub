@@ -1,1 +1,23 @@
-[]
+[
+  {
+    "id": "imported-667ac8f5-2284-4055-aaa1-412465559527",
+    "name": "Tp 4211127.2026 02 11 16 27 52 954Z.Garminping.Aaaaagmmrggx9Xgk",
+    "type": "Ride",
+    "distance": 0,
+    "moving_time": 0,
+    "start_date_local": "2026-02-11T08:00:00",
+    "description": "Imported from tp-4211127.2026-02-11-16-27-52-954Z.GarminPing.AAAAAGmMrggx9xgk.FIT",
+    "source": "fit"
+  },
+  {
+    "id": "imported-8e89eb6b-9612-42a1-b93a-ed987b0e7802",
+    "name": "Tp 4211127.2026 02 11 16 27 52 954Z.Garminping.Aaaaagmmrggx9Xgk",
+    "type": "Cycling",
+    "distance": 0.0,
+    "moving_time": 5394.742,
+    "start_date_local": "2026-02-11T14:49:00",
+    "description": "Imported from tp-4211127.2026-02-11-16-27-52-954Z.GarminPing.AAAAAGmMrggx9xgk.FIT",
+    "source": "fit",
+    "fit_id": "8e89eb6b-9612-42a1-b93a-ed987b0e7802"
+  }
+]

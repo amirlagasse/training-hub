@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import secrets
 import threading
@@ -9,6 +10,7 @@ from uuid import uuid4
 
 import requests
 from dotenv import load_dotenv
+from fitparse import FitFile
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -21,6 +23,7 @@ CALENDAR_FILE = Path("data/calendar_items.json")
 PAIRS_FILE = Path("data/workout_pairs.json")
 ACTIVITY_OVERRIDES_FILE = Path("data/activity_overrides.json")
 IMPORTED_ACTIVITIES_FILE = Path("data/imported_activities.json")
+FIT_PARSED_DIR = Path("data/fit_parsed")
 PLANNED_FILE = Path("data/planned_workouts.json")
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 STRAVA_ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
@@ -196,6 +199,186 @@ def save_imported_activities(items: list[dict[str, Any]]) -> None:
     write_json_file(IMPORTED_ACTIVITIES_FILE, items)
 
 
+def _as_float(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso(v: Any) -> str | None:
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if v is None:
+        return None
+    text = str(v).strip()
+    return text or None
+
+
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _max(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return max(values)
+
+
+def parse_fit_file_to_json(path: Path) -> dict[str, Any]:
+    with path.open("rb") as handle:
+        return parse_fit_stream_to_json(handle)
+
+
+def parse_fit_bytes_to_json(content: bytes) -> dict[str, Any]:
+    return parse_fit_stream_to_json(io.BytesIO(content))
+
+
+def parse_fit_stream_to_json(stream: Any) -> dict[str, Any]:
+    # Analysis pipeline source of truth:
+    # records -> chart series points, laps -> lap table and lap-range selection.
+    fit = FitFile(stream)
+    points: list[dict[str, Any]] = []
+    laps: list[dict[str, Any]] = []
+    session_values: dict[str, Any] = {}
+    sport = "Ride"
+
+    for msg in fit.get_messages():
+        vals = msg.get_values()
+        name = msg.name
+        if name == "record":
+            ts = vals.get("timestamp")
+            if not isinstance(ts, datetime):
+                continue
+            row = {
+                "timestamp": ts.isoformat(),
+                "heart_rate": _as_float(vals.get("heart_rate")),
+                "speed": _as_float(vals.get("speed")),
+                "distance": _as_float(vals.get("distance")),
+                "cadence": _as_float(vals.get("cadence")),
+                "power": _as_float(vals.get("power")),
+                "altitude": _as_float(vals.get("altitude")),
+            }
+            points.append(row)
+        elif name == "lap":
+            start_ts = vals.get("start_time") or vals.get("timestamp")
+            start_iso = _iso(start_ts)
+            dur_s = _as_float(vals.get("total_timer_time")) or _as_float(vals.get("total_elapsed_time")) or 0.0
+            end_iso = None
+            if isinstance(start_ts, datetime):
+                end_iso = (start_ts.timestamp() + dur_s)
+                end_iso = datetime.fromtimestamp(end_iso).isoformat()
+            laps.append(
+                {
+                    "name": f"Lap {len(laps) + 1}",
+                    "start": start_iso,
+                    "end": end_iso,
+                    "duration_s": dur_s if dur_s > 0 else None,
+                    "distance_m": _as_float(vals.get("total_distance")),
+                    "avg_hr": _as_float(vals.get("avg_heart_rate")),
+                    "max_hr": _as_float(vals.get("max_heart_rate")),
+                    "avg_speed": _as_float(vals.get("avg_speed")),
+                    "max_speed": _as_float(vals.get("max_speed")),
+                    "avg_power": _as_float(vals.get("avg_power")),
+                    "max_power": _as_float(vals.get("max_power")),
+                    "avg_cadence": _as_float(vals.get("avg_cadence")),
+                    "max_cadence": _as_float(vals.get("max_cadence")),
+                }
+            )
+        elif name == "session":
+            session_values = vals
+            s = str(vals.get("sport") or "").strip()
+            if s:
+                sport = s.title()
+        elif name == "sport":
+            s = str(vals.get("sport") or "").strip()
+            if s:
+                sport = s.title()
+
+    if not points:
+        raise HTTPException(status_code=400, detail="No record points found in FIT file.")
+
+    first_ts = datetime.fromisoformat(points[0]["timestamp"])
+    last_ts = datetime.fromisoformat(points[-1]["timestamp"])
+    duration_s = max(1.0, (last_ts - first_ts).total_seconds())
+
+    distances = [p["distance"] for p in points if p.get("distance") is not None]
+    distance_m = 0.0
+    if distances:
+        distance_m = max(0.0, distances[-1] - distances[0]) if len(distances) > 1 else max(0.0, distances[0])
+    session_distance = _as_float(session_values.get("total_distance"))
+    if session_distance and session_distance > 0:
+        distance_m = session_distance
+
+    hr_values = [p["heart_rate"] for p in points if p.get("heart_rate") is not None]
+    speed_values = [p["speed"] for p in points if p.get("speed") is not None]
+    power_values = [p["power"] for p in points if p.get("power") is not None]
+    cadence_values = [p["cadence"] for p in points if p.get("cadence") is not None]
+    alt_values = [p["altitude"] for p in points if p.get("altitude") is not None]
+
+    avg_speed = _mean(speed_values)
+    max_speed = _max(speed_values)
+    session_timer = _as_float(session_values.get("total_timer_time")) or _as_float(session_values.get("total_elapsed_time"))
+    if session_timer and session_timer > 0:
+        duration_s = session_timer
+
+    if not laps:
+        laps.append(
+            {
+                "name": "Lap 1",
+                "start": first_ts.isoformat(),
+                "end": last_ts.isoformat(),
+                "duration_s": duration_s,
+                "distance_m": distance_m,
+                "avg_hr": _mean(hr_values),
+                "max_hr": _max(hr_values),
+                "avg_speed": avg_speed,
+                "max_speed": max_speed,
+                "avg_power": _mean(power_values),
+                "max_power": _max(power_values),
+                "avg_cadence": _mean(cadence_values),
+                "max_cadence": _max(cadence_values),
+            }
+        )
+
+    return {
+        "summary": {
+            "start": first_ts.isoformat(),
+            "end": last_ts.isoformat(),
+            "duration_s": duration_s,
+            "distance_m": distance_m,
+            "avg_hr": _as_float(session_values.get("avg_heart_rate")) or _mean(hr_values),
+            "max_hr": _as_float(session_values.get("max_heart_rate")) or _max(hr_values),
+            "avg_speed": _as_float(session_values.get("avg_speed")) or avg_speed,
+            "max_speed": _as_float(session_values.get("max_speed")) or max_speed,
+            "avg_power": _as_float(session_values.get("avg_power")) or _mean(power_values),
+            "max_power": _as_float(session_values.get("max_power")) or _max(power_values),
+            "avg_cadence": _as_float(session_values.get("avg_cadence")) or _mean(cadence_values),
+            "max_cadence": _as_float(session_values.get("max_cadence")) or _max(cadence_values),
+            "elev_gain_m": _as_float(session_values.get("total_ascent")),
+            "sport": sport,
+        },
+        "series": points,
+        "laps": laps,
+    }
+
+
+def save_fit_parsed(fit_id: str, data: dict[str, Any]) -> None:
+    write_json_file(FIT_PARSED_DIR / f"{fit_id}.json", data)
+
+
+def load_fit_parsed(fit_id: str) -> dict[str, Any]:
+    path = FIT_PARSED_DIR / f"{fit_id}.json"
+    data = read_json_file(path, {})
+    if not data:
+        raise HTTPException(status_code=404, detail="Parsed FIT data not found.")
+    return data
+
+
 def demo_activities() -> list[dict[str, Any]]:
     return []
 
@@ -246,6 +429,9 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
             duration = float(payload.get("duration_min", 0) or 0)
             distance = float(payload.get("distance_km", 0) or 0)
             intensity = float(payload.get("intensity", 6) or 6)
+            completed_duration = float(payload.get("completed_duration_min", 0) or 0)
+            completed_distance = float(payload.get("completed_distance_km", 0) or 0)
+            completed_tss = float(payload.get("completed_tss", 0) or 0)
         except (TypeError, ValueError) as err:
             raise HTTPException(status_code=400, detail="Workout values must be numeric.") from err
 
@@ -253,6 +439,21 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
         item["duration_min"] = max(0.0, duration)
         item["distance_km"] = max(0.0, distance)
         item["intensity"] = max(1.0, min(10.0, intensity))
+        item["completed_duration_min"] = max(0.0, completed_duration)
+        item["completed_distance_km"] = max(0.0, completed_distance)
+        item["completed_tss"] = max(0.0, completed_tss)
+        item["comments"] = str(payload.get("comments", "")).strip()
+        feel = payload.get("feel")
+        try:
+            feel_val = int(feel) if feel is not None and str(feel).strip() else 0
+        except (TypeError, ValueError):
+            feel_val = 0
+        try:
+            rpe_val = int(payload.get("rpe", 0) or 0)
+        except (TypeError, ValueError):
+            rpe_val = 0
+        item["feel"] = max(0, min(5, feel_val))
+        item["rpe"] = max(0, min(10, rpe_val))
 
     if kind == "event":
         item["event_type"] = str(payload.get("event_type", "Race")).strip() or "Race"
@@ -271,7 +472,7 @@ def page() -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Training Hub</title>
+  <title>Training Freaks</title>
   <style>
     :root {
       --bg: #e8eef6;
@@ -294,7 +495,8 @@ def page() -> str:
     body {
       margin: 0;
       color: var(--text);
-      font-family: "Segoe UI", Tahoma, sans-serif;
+      /* TODO: add @font-face for TT Interphases Pro from /static/fonts when font files are available. */
+      font-family: "TT Interphases Pro", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
       background: linear-gradient(180deg, #f4f7fb 0%, var(--bg) 100%);
     }
 
@@ -367,6 +569,17 @@ def page() -> str:
       border-radius: 8px;
       padding: 5px 10px;
       font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .unit-btn {
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      background: rgba(255, 255, 255, 0.14);
+      color: #eef4fb;
+      border-radius: 8px;
+      padding: 5px 8px;
+      font-size: 11px;
       font-weight: 700;
       cursor: pointer;
     }
@@ -1104,6 +1317,34 @@ def page() -> str:
       pointer-events: none;
     }
 
+    .feel-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .feel-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      border: 1px solid #c9d7e9;
+      background: #fff;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .feel-btn.active {
+      border-color: #1f5bd7;
+      box-shadow: 0 0 0 2px #dce9ff inset;
+    }
+
+    .feel-btn:disabled,
+    .rpe-select:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
     .wv-body {
       padding: 14px;
       max-height: 72vh;
@@ -1305,6 +1546,10 @@ def page() -> str:
       background: #eef2f7;
     }
 
+    .tp-in.muted {
+      background: #eef2f7;
+    }
+
     .tp-unit {
       color: #24364c;
       font-size: 16px;
@@ -1418,7 +1663,7 @@ def page() -> str:
 </head>
 <body>
   <header class="top-nav">
-    <div class="brand">Training Hub</div>
+    <div class="brand">TRAININGFREAKS</div>
     <nav class="tabs">
       <button class="tab active" data-view="home">Home</button>
       <button class="tab" data-view="calendar">Calendar</button>
@@ -1426,6 +1671,8 @@ def page() -> str:
     </nav>
     <div class="nav-right">
       <button class="import-btn" id="uploadFitBtn">Import FIT</button>
+      <button class="unit-btn" id="distanceUnitBtn">Dist: km</button>
+      <button class="unit-btn" id="elevationUnitBtn">Elev: m</button>
       <input id="uploadFitInput" type="file" accept=".fit" style="display:none;" />
       <span>Amir LaGasse</span>
       <button class="nav-settings" id="globalSettings" title="Settings">&#9881;</button>
@@ -1614,7 +1861,7 @@ def page() -> str:
                     <label>Distance</label>
                     <input id="dDistance" class="tp-in" type="number" min="0" step="0.1" />
                     <input class="tp-in readonly" readonly />
-                    <div class="tp-unit">km</div>
+                    <div class="tp-unit distance-unit-label">km</div>
                   </div>
                   <div class="tp-row">
                     <label>TSS</label>
@@ -1752,7 +1999,7 @@ def page() -> str:
                       <label>Distance</label>
                       <input id="pcDistPlan" class="tp-in" />
                       <input id="pcDistComp" class="tp-in" />
-                      <div class="tp-unit">km</div>
+                      <div class="tp-unit distance-unit-label">km</div>
                     </div>
                     <div class="tp-row">
                       <label>TSS</label>
@@ -1794,15 +2041,23 @@ def page() -> str:
                     </div>
                     <div class="field">
                       <label>How did you feel?</label>
-                      <div style="display:flex; gap:8px;">
-                        <button class="wv-tab" data-feel="1">Very Weak</button>
-                        <button class="wv-tab active" data-feel="3">Normal</button>
-                        <button class="wv-tab" data-feel="5">Very Strong</button>
+                      <div class="feel-row" id="feelRow">
+                        <button class="feel-btn" type="button" data-feel="1" title="Very Weak">😫</button>
+                        <button class="feel-btn" type="button" data-feel="2" title="Weak">🙁</button>
+                        <button class="feel-btn" type="button" data-feel="3" title="Normal">😐</button>
+                        <button class="feel-btn" type="button" data-feel="4" title="Strong">🙂</button>
+                        <button class="feel-btn" type="button" data-feel="5" title="Very Strong">😁</button>
                       </div>
                     </div>
                     <div class="field">
                       <label>Rating of Perceived Exertion (RPE)</label>
-                      <input id="wvRpe" type="range" min="1" max="10" value="6" />
+                      <select id="wvRpe" class="rpe-select">
+                        <option value="0">Unset</option>
+                        <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                        <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+                        <option value="7">7</option><option value="8">8</option><option value="9">9</option>
+                        <option value="10">10</option>
+                      </select>
                     </div>
                     <div class="field">
                       <label>Post-activity comments</label>
@@ -1824,6 +2079,7 @@ def page() -> str:
                     <span class="l-spd">Speed</span>
                   </div>
                   <svg id="wvChart" viewBox="0 0 1200 360" width="100%" height="320" role="img" aria-label="Workout analysis chart"></svg>
+                  <svg id="wvViewfinder" viewBox="0 0 1200 90" width="100%" height="80" role="img" aria-label="Workout viewfinder"></svg>
                 </div>
                 <table class="lap-table" id="wvLapTable">
                   <thead>
@@ -1831,7 +2087,7 @@ def page() -> str:
                       <th></th>
                       <th>Segment</th>
                       <th>Duration</th>
-                      <th>TSS</th>
+                      <th>Distance</th>
                       <th>Avg HR</th>
                       <th>Avg W</th>
                     </tr>
@@ -1846,6 +2102,11 @@ def page() -> str:
             </div>
           </section>
         </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn ghost" id="cancelWorkoutView">Cancel</button>
+        <button class="btn ghost" id="deleteWorkoutView">Delete</button>
+        <button class="btn primary" id="saveCloseWorkoutView">Save &amp; Close</button>
       </div>
     </div>
   </div>
@@ -1867,20 +2128,20 @@ def page() -> str:
     ];
 
     const ICONS = {
-      run: '<svg viewBox="0 0 24 24"><path d="M13 4a2 2 0 1 0 0.01 0"/><path d="M8 12l4-2 2 2 3 1"/><path d="M7 18l3-4"/><path d="M12 13l-1 6"/><path d="M14 13l5 3"/></svg>',
-      bike: '<svg viewBox="0 0 24 24"><circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="M7 17l4-6h4l2 6"/><path d="M10 9h3"/><path d="M14 7h2"/></svg>',
-      swim: '<svg viewBox="0 0 24 24"><path d="M3 15c1.5 1 2.5 1 4 0s2.5-1 4 0 2.5 1 4 0 2.5-1 4 0"/><path d="M5 10l3-3 3 3"/><path d="M11 7l3 3"/></svg>',
-      brick: '<svg viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="8" rx="1"/><path d="M7 8v8M12 8v8M17 8v8"/></svg>',
-      pulse: '<svg viewBox="0 0 24 24"><path d="M3 12h4l2-4 3 8 2-4h7"/></svg>',
-      rest: '<svg viewBox="0 0 24 24"><rect x="3" y="9" width="18" height="7" rx="1"/><path d="M5 9V7M19 9V7M7 16v2M17 16v2"/></svg>',
-      mtb: '<svg viewBox="0 0 24 24"><circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="M7 17l4-6 3 2 2 4"/><path d="M12 8l2-1"/></svg>',
-      strength: '<svg viewBox="0 0 24 24"><path d="M4 10v4M8 9v6M16 9v6M20 10v4"/><path d="M8 12h8"/></svg>',
-      timer: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="7"/><path d="M12 13V9M9 3h6"/></svg>',
-      ski: '<svg viewBox="0 0 24 24"><path d="M5 19l6-14M13 19l6-14"/><path d="M3 21h8M13 21h8"/></svg>',
-      rowing: '<svg viewBox="0 0 24 24"><path d="M3 18c2 2 16 2 18 0"/><path d="M9 8l4 4M13 12l3-5"/></svg>',
-      walk: '<svg viewBox="0 0 24 24"><circle cx="13" cy="4" r="2"/><path d="M11 9l2-2 2 3"/><path d="M12 10l-2 4"/><path d="M14 12l4 2"/></svg>',
-      other: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v5M12 16h.01"/></svg>',
-      event: '<svg viewBox="0 0 24 24"><path d="M8 4h8v4l-2 2 2 2v8H8v-8l2-2-2-2z"/></svg>',
+      run: '<svg viewBox="0 0 24 24"><circle cx="14.5" cy="4.5" r="1.8"/><path d="M8 11.5l4-2.3 1.9 1.7 2.8 1.3"/><path d="M7.5 19l3-4.7"/><path d="M12.4 13.2l-1.4 5.7"/><path d="M14.1 13.4l5 2.8"/></svg>',
+      bike: '<svg viewBox="0 0 24 24"><circle cx="6" cy="17" r="3.2"/><circle cx="18" cy="17" r="3.2"/><path d="M6 17l4.2-7h4.4l2.8 7"/><path d="M10 10h2.8"/><path d="M14 7.5h2"/></svg>',
+      swim: '<svg viewBox="0 0 24 24"><path d="M3 16c1.3.9 2.6.9 3.9 0 1.3-.9 2.6-.9 3.9 0 1.3.9 2.6.9 3.9 0 1.3-.9 2.6-.9 3.9 0"/><path d="M6.5 10.5l2.2-2.1 2.1 2.1"/><path d="M11.7 8.6l2.2 2.1"/></svg>',
+      brick: '<svg viewBox="0 0 24 24"><rect x="3.5" y="8" width="17" height="8" rx="1.2"/><path d="M8.5 8v8M12 8v8M15.5 8v8"/></svg>',
+      pulse: '<svg viewBox="0 0 24 24"><path d="M3 12h4.2l1.8-3.7 3.1 7.2 2.1-4.2H21"/></svg>',
+      rest: '<svg viewBox="0 0 24 24"><rect x="3.5" y="9" width="17" height="6.5" rx="1.4"/><path d="M5.3 9V7.2M18.7 9V7.2M7 15.5v1.8M17 15.5v1.8"/></svg>',
+      mtb: '<svg viewBox="0 0 24 24"><circle cx="6" cy="17" r="3.2"/><circle cx="18" cy="17" r="3.2"/><path d="M6.2 17l4.2-7 3.4 2.2 2.1 4.8"/><path d="M12.2 8.2l1.7-.9"/></svg>',
+      strength: '<svg viewBox="0 0 24 24"><path d="M4.5 10v4M7.8 8.8v6.4M16.2 8.8v6.4M19.5 10v4"/><path d="M7.8 12h8.4"/></svg>',
+      timer: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="7"/><path d="M12 13V9.2M9.4 3.2h5.2"/></svg>',
+      ski: '<svg viewBox="0 0 24 24"><path d="M5 19.2L11.2 5M13 19.2L19.2 5"/><path d="M3.2 21h8M12.8 21h8"/></svg>',
+      rowing: '<svg viewBox="0 0 24 24"><path d="M3.5 18.2c2.5 1.8 14.5 1.8 17 0"/><path d="M9.3 8.5l3.6 3.6M12.9 12.1l2.8-4.8"/></svg>',
+      walk: '<svg viewBox="0 0 24 24"><circle cx="13.8" cy="4.3" r="1.8"/><path d="M11.5 9.5l2.3-2.2 2.1 3.1"/><path d="M12.5 10.3l-2.1 4.5"/><path d="M14.4 12.5l4 1.8"/></svg>',
+      other: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7.6v5.2"/><circle cx="12" cy="16.8" r="0.5" fill="currentColor" stroke="none"/></svg>',
+      event: '<svg viewBox="0 0 24 24"><path d="M8 4h8v3.8l-2 2.2 2 2.2V20H8v-7.8l2-2.2-2-2.2z"/></svg>',
       goal: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/></svg>',
       note: '<svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M15 3v3h3"/></svg>',
       metrics: '<svg viewBox="0 0 24 24"><path d="M4 18h16"/><path d="M7 18v-6M12 18V8M17 18v-3"/></svg>',
@@ -1918,6 +2179,9 @@ def page() -> str:
     let editingItemId = null;
     let analyzeState = null;
     let initialMonthCentered = false;
+    let distanceUnit = localStorage.getItem('distanceUnit') || 'km';
+    let elevationUnit = localStorage.getItem('elevationUnit') || 'm';
+    let currentFeel = 0;
 
     function localDateKey(d) {
       const dt = new Date(d);
@@ -1939,12 +2203,33 @@ def page() -> str:
       return localDateKey(d);
     }
 
+    function toDisplayDistanceFromMeters(meters) {
+      const m = Number(meters || 0);
+      if (distanceUnit === 'm') return { value: m, unit: 'm' };
+      if (distanceUnit === 'mi') return { value: m / 1609.344, unit: 'mi' };
+      return { value: m / 1000, unit: 'km' };
+    }
+
+    function toDisplayDistanceFromKm(km) {
+      return toDisplayDistanceFromMeters(Number(km || 0) * 1000);
+    }
+
+    function fromDisplayDistanceToKm(val) {
+      const n = Number(val || 0);
+      if (!Number.isFinite(n)) return 0;
+      if (distanceUnit === 'm') return n / 1000;
+      if (distanceUnit === 'mi') return n * 1.609344;
+      return n;
+    }
+
     function fmtDistanceMeters(meters) {
-      return ((meters || 0) / 1000).toFixed(1) + ' km';
+      const d = toDisplayDistanceFromMeters(meters);
+      return `${d.value.toFixed(distanceUnit === 'm' ? 0 : 1)} ${d.unit}`;
     }
 
     function fmtDistanceKm(km) {
-      return Number(km || 0).toFixed(1) + ' km';
+      const d = toDisplayDistanceFromKm(km);
+      return `${d.value.toFixed(distanceUnit === 'm' ? 0 : 1)} ${d.unit}`;
     }
 
     function fmtHours(seconds) {
@@ -1959,6 +2244,12 @@ def page() -> str:
       return parseDateKey(key).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).toUpperCase();
     }
 
+    function fmtElevation(meters) {
+      const m = Number(meters || 0);
+      if (elevationUnit === 'ft') return `${Math.round(m * 3.28084)} ft`;
+      return `${Math.round(m)} m`;
+    }
+
     function monthKey(year, month) {
       return `${year}-${String(month + 1).padStart(2, '0')}`;
     }
@@ -1968,6 +2259,12 @@ def page() -> str:
       document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
       document.getElementById('view-' + name).classList.add('active');
       document.getElementById('pageTitle').textContent = name.charAt(0).toUpperCase() + name.slice(1);
+    }
+
+    function updateUnitButtons() {
+      document.getElementById('distanceUnitBtn').textContent = `Dist: ${distanceUnit}`;
+      document.getElementById('elevationUnitBtn').textContent = `Elev: ${elevationUnit}`;
+      document.querySelectorAll('.distance-unit-label').forEach((el) => { el.textContent = distanceUnit; });
     }
 
     function intensityByType(type) {
@@ -2010,9 +2307,21 @@ def page() -> str:
       return Number(plannedItem.duration_min || 0);
     }
 
+    function completedFromPlanned(plannedItem) {
+      const dur = Number(plannedItem.completed_duration_min || 0);
+      const dist = Number(plannedItem.completed_distance_km || 0);
+      const tss = Number(plannedItem.completed_tss || 0);
+      if (dur <= 0 && dist <= 0 && tss <= 0) return null;
+      return {
+        moving_time: dur * 60,
+        distance: dist * 1000,
+        tss_override: tss,
+      };
+    }
+
     function completedMetric(completedItem, basis) {
       if (basis === 'distance') return Number(completedItem.distance || 0) / 1000;
-      if (basis === 'tss') return activityToTss(completedItem);
+      if (basis === 'tss') return Number(completedItem.tss_override || 0) || activityToTss(completedItem);
       return Number(completedItem.moving_time || 0) / 60;
     }
 
@@ -2128,6 +2437,57 @@ def page() -> str:
       return `<span class="type-icon" style="color:${color}">${(ICONS[name] || ICONS.other).replace('<svg', '<svg style="stroke:currentColor"')}</span>`;
     }
 
+    function workoutIconKey(type) {
+      const t = String(type || '').toLowerCase();
+      if (t.includes('run') || t.includes('walk')) return 'run';
+      if (t.includes('swim')) return 'swim';
+      if (t.includes('strength')) return 'strength';
+      if (t.includes('ride') || t.includes('bike') || t.includes('cycling')) return 'bike';
+      return 'other';
+    }
+
+    function cardIcon(type) {
+      const key = workoutIconKey(type);
+      const color = ICON_COLORS[key] || '#2a4b72';
+      const svg = (ICONS[key] || ICONS.other).replace(
+        '<svg',
+        '<svg style="stroke:currentColor;width:12px;height:12px;vertical-align:-1px;"',
+      );
+      return `<span style="display:inline-flex;align-items:center;color:${color};margin-right:4px;">${svg}</span>`;
+    }
+
+    function feelEmoji(v) {
+      const map = { 1: '😫', 2: '🙁', 3: '😐', 4: '🙂', 5: '😁' };
+      return map[Number(v)] || '';
+    }
+
+    function setFeelValue(v) {
+      currentFeel = Number(v || 0);
+      document.querySelectorAll('.feel-btn').forEach((btn) => {
+        btn.classList.toggle('active', Number(btn.dataset.feel) === currentFeel);
+      });
+    }
+
+    function parseDurationToMin(text) {
+      const raw = String(text || '').trim();
+      if (!raw) return 0;
+      if (raw.includes(':')) {
+        const parts = raw.split(':').map((x) => Number(x || 0));
+        if (parts.length === 2) return parts[0] * 60 + parts[1];
+        if (parts.length === 3) return parts[0] * 60 + parts[1] + (parts[2] / 60);
+      }
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    function hasCompletedData(planned, completed) {
+      if (completed) return true;
+      if (!planned) return false;
+      return Number(planned.completed_duration_min || 0) > 0
+        || Number(planned.completed_distance_km || 0) > 0
+        || Number(planned.completed_tss || 0) > 0;
+    }
+
     function buildTypeGrids() {
       const workoutGrid = document.getElementById('workoutTypeGrid');
       workoutGrid.innerHTML = '';
@@ -2205,7 +2565,11 @@ def page() -> str:
       document.getElementById('dDescriptionOther').value = detailDesc;
       document.getElementById('dWorkoutType').value = existingItem ? (existingItem.workout_type || selectedWorkoutType) : selectedWorkoutType;
       document.getElementById('dDuration').value = existingItem ? (existingItem.duration_min || '') : '';
-      document.getElementById('dDistance').value = existingItem ? (existingItem.distance_km || '') : '';
+      if (existingItem && Number(existingItem.distance_km || 0) > 0) {
+        document.getElementById('dDistance').value = toDisplayDistanceFromKm(existingItem.distance_km).value.toFixed(distanceUnit === 'm' ? 0 : 1);
+      } else {
+        document.getElementById('dDistance').value = '';
+      }
       document.getElementById('dIntensity').value = existingItem ? (existingItem.intensity || 6) : '6';
       document.getElementById('dEventType').value = existingItem ? (existingItem.event_type || 'Race') : 'Race';
       document.getElementById('dAvailability').value = existingItem ? (existingItem.availability || 'Unavailable') : 'Unavailable';
@@ -2239,7 +2603,7 @@ def page() -> str:
       if (selectedKind === 'workout') {
         payload.workout_type = document.getElementById('dWorkoutType').value || selectedWorkoutType;
         payload.duration_min = Number(document.getElementById('dDuration').value || 0);
-        payload.distance_km = Number(document.getElementById('dDistance').value || 0);
+        payload.distance_km = fromDisplayDistanceToKm(document.getElementById('dDistance').value);
         payload.intensity = Number(document.getElementById('dIntensity').value || 6);
       }
 
@@ -2281,6 +2645,7 @@ def page() -> str:
 
     function buildDayAggregateMap() {
       const map = {};
+      const pairPlanned = new Set(pairs.map(p => String(p.planned_id)));
 
       activities.forEach(a => {
         const key = dateKeyFromDate(new Date(a.start_date_local));
@@ -2298,6 +2663,13 @@ def page() -> str:
           map[key] = { done: [], items: [], durationMin: 0, tss: 0 };
         }
         map[key].items.push(item);
+        if (item.kind === 'workout' && !pairPlanned.has(String(item.id))) {
+          const manual = completedFromPlanned(item);
+          if (manual) {
+            map[key].durationMin += Number(manual.moving_time || 0) / 60;
+            map[key].tss += Number(manual.tss_override || 0) || activityToTss(manual);
+          }
+        }
       });
 
       return map;
@@ -2458,22 +2830,18 @@ def page() -> str:
       switchWorkoutTab('summary');
       renderWorkoutSummary(payload);
       const analyzeBtn = document.querySelector('.wv-tab[data-wv-tab="analyze"]');
-      const hasFile = payload.source === 'strava' || !!payload.pair;
+      const hasFile = !!(data.fit_id);
       analyzeBtn.classList.toggle('disabled', !hasFile);
       if (hasFile) {
-        let analyzePayload = payload;
-        if (payload.source !== 'strava' && payload.pair) {
-          const paired = activities.find(a => String(a.id) === String(payload.pair.strava_id));
-          if (paired) {
-            analyzePayload = { ...payload, source: 'strava', data: paired };
-          }
-        }
-        renderWorkoutAnalyze(analyzePayload);
+        renderWorkoutAnalyze(payload);
       } else {
         document.getElementById('wvAnalyze').classList.add('hidden');
       }
       const unpairBtn = document.getElementById('wvUnpairBtn');
       const pair = payload.pair || (payload.planned ? pairForPlanned(payload.planned.id) : pairForStrava(String(data.id)));
+      const completedExists = payload.source === 'strava' || hasCompletedData(parentPlanned || data, pair ? data : null);
+      document.querySelectorAll('.feel-btn').forEach((btn) => { btn.disabled = !completedExists; });
+      document.getElementById('wvRpe').disabled = !completedExists;
       unpairBtn.style.display = pair ? 'inline-block' : 'none';
       unpairBtn.onclick = async () => {
         if (!pair) return;
@@ -2502,6 +2870,47 @@ def page() -> str:
       document.getElementById('workoutViewModal').classList.remove('open');
     }
 
+    async function saveWorkoutViewAndClose() {
+      const payload = window.currentWorkoutPayload;
+      if (!payload) return;
+      const data = payload.data || {};
+      const targetPlanned = payload.planned || (payload.source === 'planned' ? data : null);
+      const description = document.getElementById('wvDescription').value;
+      const comments = document.getElementById('wvComments').value;
+      const completedDuration = parseDurationToMin(document.getElementById('pcDurComp').value);
+      const completedDistanceKm = fromDisplayDistanceToKm(document.getElementById('pcDistComp').value);
+      const completedTss = Number(document.getElementById('pcTssComp').value || 0);
+      const rpe = Number(document.getElementById('wvRpe').value || 0);
+      const hasCompleted = completedDuration > 0 || completedDistanceKm > 0 || completedTss > 0 || payload.source === 'strava';
+      const feel = hasCompleted ? currentFeel : 0;
+      const rpeOut = hasCompleted ? rpe : 0;
+
+      if (targetPlanned) {
+        await fetch(`/calendar-items/${targetPlanned.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...targetPlanned,
+            description,
+            comments,
+            feel,
+            rpe: rpeOut,
+            completed_duration_min: completedDuration,
+            completed_distance_km: completedDistanceKm,
+            completed_tss: completedTss,
+          }),
+        });
+      } else if (payload.source === 'strava') {
+        await fetch(`/activities/${data.id}/meta`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description, comments, feel, rpe: rpeOut }),
+        });
+      }
+      closeWorkoutModal();
+      await loadData(false);
+    }
+
     function switchWorkoutTab(tab) {
       const analyzeBtn = document.querySelector('.wv-tab[data-wv-tab="analyze"]');
       if (tab === 'analyze' && analyzeBtn.classList.contains('disabled')) {
@@ -2514,40 +2923,51 @@ def page() -> str:
       document.getElementById('wvAnalyze').classList.toggle('hidden', tab !== 'analyze');
     }
 
-    function seededSeries(seed, count, min, max) {
-      let x = seed % 2147483647;
-      if (x <= 0) x += 2147483646;
-      const out = [];
-      for (let i = 0; i < count; i += 1) {
-        x = (x * 48271) % 2147483647;
-        const r = x / 2147483647;
-        out.push(min + r * (max - min));
-      }
-      return out;
+    function num(v) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
     }
 
-    function pathFromSeries(series, width, height) {
-      if (!series.length) return '';
-      const min = Math.min(...series);
-      const max = Math.max(...series);
-      const span = Math.max(1, max - min);
-      return series.map((v, i) => {
-        const x = (i / (series.length - 1)) * width;
-        const y = height - ((v - min) / span) * height;
-        return `${i === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`;
-      }).join(' ');
+    function timeToSec(iso, baseMs) {
+      const t = new Date(iso).getTime();
+      return Math.max(0, (t - baseMs) / 1000);
+    }
+
+    function hms(totalSec) {
+      const s = Math.max(0, Math.round(totalSec));
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+    }
+
+    function fmtAxis(val, key) {
+      if (key === 'speed') {
+        if (distanceUnit === 'mi') return `${(val * 2.23694).toFixed(1)} mph`;
+        if (distanceUnit === 'm') return `${val.toFixed(2)} m/s`;
+        return `${(val * 3.6).toFixed(1)} km/h`;
+      }
+      if (key === 'distance') return fmtDistanceMeters(val);
+      if (key === 'power') return `${Math.round(val)} W`;
+      if (key === 'heart_rate') return `${Math.round(val)} bpm`;
+      if (key === 'cadence') return `${Math.round(val)} rpm`;
+      if (key === 'altitude') return fmtElevation(val);
+      return String(Math.round(val));
     }
 
     function renderWorkoutSummary(payload) {
       const data = payload.data;
       const parentPlanned = payload.planned || null;
+      const explicitCompleted = parentPlanned ? completedFromPlanned(parentPlanned) : completedFromPlanned(data);
       const completedDurationMin = payload.source === 'strava'
         ? Number(data.moving_time || 0) / 60
-        : Number(data.duration_min || 0);
+        : explicitCompleted ? Number(explicitCompleted.moving_time || 0) / 60 : 0;
       const completedDistanceKm = payload.source === 'strava'
         ? Number(data.distance || 0) / 1000
-        : Number(data.distance_km || 0);
-      const completedTss = payload.source === 'strava' ? activityToTss(data) : itemToTss(data);
+        : explicitCompleted ? Number(explicitCompleted.distance || 0) / 1000 : 0;
+      const completedTss = payload.source === 'strava'
+        ? activityToTss(data)
+        : explicitCompleted ? Number(explicitCompleted.tss_override || 0) : 0;
       const typeLabel = parentPlanned
         ? (parentPlanned.workout_type || 'Workout')
         : payload.source === 'strava' ? (data.type || 'Workout') : (data.workout_type || 'Workout');
@@ -2558,155 +2978,305 @@ def page() -> str:
           : `${data.date} (Planned)`;
       document.getElementById('wvSummaryText').textContent = `${typeLabel} • ${dateLabel}`;
       document.getElementById('wvDescription').value = (parentPlanned && parentPlanned.description) || data.description || '';
-      document.getElementById('wvComments').value = '';
-      document.getElementById('wvRpe').value = '6';
+      document.getElementById('wvComments').value = (parentPlanned && parentPlanned.comments) || data.comments || '';
+      document.getElementById('wvRpe').value = String((parentPlanned && parentPlanned.rpe) || data.rpe || 0);
+      setFeelValue((parentPlanned && parentPlanned.feel) || data.feel || 0);
       const plannedDuration = parentPlanned ? Number(parentPlanned.duration_min || 0) : Number(data.duration_min || 0);
       const plannedDistance = parentPlanned ? Number(parentPlanned.distance_km || 0) : Number(data.distance_km || 0);
       const plannedTss = parentPlanned ? itemToTss(parentPlanned) : itemToTss(data);
       document.getElementById('pcDurPlan').value = plannedDuration ? formatDurationMin(plannedDuration) : '--';
-      document.getElementById('pcDurComp').value = completedDurationMin ? formatDurationMin(completedDurationMin) : '--';
-      document.getElementById('pcDistPlan').value = plannedDistance ? `${plannedDistance.toFixed(1)}` : '--';
-      document.getElementById('pcDistComp').value = completedDistanceKm ? `${completedDistanceKm.toFixed(1)}` : '--';
+      document.getElementById('pcDurComp').value = completedDurationMin ? formatDurationMin(completedDurationMin) : '';
+      document.getElementById('pcDistPlan').value = plannedDistance ? `${toDisplayDistanceFromKm(plannedDistance).value.toFixed(distanceUnit === 'm' ? 0 : 1)}` : '--';
+      document.getElementById('pcDistComp').value = completedDistanceKm ? `${toDisplayDistanceFromKm(completedDistanceKm).value.toFixed(distanceUnit === 'm' ? 0 : 1)}` : '';
       document.getElementById('pcTssPlan').value = plannedTss ? String(plannedTss) : '--';
-      document.getElementById('pcTssComp').value = completedTss ? String(completedTss) : '--';
-      document.getElementById('wvHrAvg').value = String(Math.round(120 + completedTss * 0.5));
-      document.getElementById('wvPowerAvg').value = String(Math.round(150 + completedTss * 1.8));
+      document.getElementById('pcTssComp').value = completedTss ? String(Math.round(completedTss)) : '';
+      const fitSummary = data.fit_id ? null : null;
+      document.getElementById('wvHrAvg').value = completedTss ? String(Math.round(120 + completedTss * 0.5)) : '';
+      document.getElementById('wvPowerAvg').value = completedTss ? String(Math.round(150 + completedTss * 1.8)) : '';
+      if (data.fit_id) {
+        fetch(`/fit/${data.fit_id}`).then(r => r.ok ? r.json() : null).then((fit) => {
+          if (!fit) return;
+          const s = fit.summary || {};
+          if (s.avg_hr) document.getElementById('wvHrAvg').value = String(Math.round(s.avg_hr));
+          if (s.avg_power) document.getElementById('wvPowerAvg').value = String(Math.round(s.avg_power));
+        }).catch(() => {});
+      }
+
+      const canEditCompleted = payload.source !== 'strava' && (parentPlanned || data.kind === 'workout');
+      ['pcDurComp', 'pcDistComp', 'pcTssComp'].forEach((id) => {
+        const el = document.getElementById(id);
+        el.readOnly = false;
+        el.classList.toggle('muted', !el.value);
+        el.oninput = () => el.classList.toggle('muted', !el.value);
+      });
+      if (canEditCompleted) {
+        const target = parentPlanned || data;
+        let timer = null;
+        const parseDur = (text) => {
+          if (!text) return 0;
+          if (text.includes(':')) {
+            const parts = text.split(':').map(n => Number(n || 0));
+            if (parts.length === 2) return parts[0] * 60 + parts[1];
+            if (parts.length === 3) return parts[0] * 60 + parts[1] + (parts[2] / 60);
+          }
+          return Number(text || 0);
+        };
+        const save = () => {
+          clearTimeout(timer);
+          timer = setTimeout(async () => {
+            await fetch(`/calendar-items/${target.id}/completed`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                completed_duration_min: parseDur(document.getElementById('pcDurComp').value),
+                completed_distance_km: fromDisplayDistanceToKm(document.getElementById('pcDistComp').value),
+                completed_tss: Number(document.getElementById('pcTssComp').value || 0),
+              }),
+            });
+            await loadData(false);
+          }, 250);
+        };
+        document.getElementById('pcDurComp').onchange = save;
+        document.getElementById('pcDistComp').onchange = save;
+        document.getElementById('pcTssComp').onchange = save;
+      }
     }
 
-    function renderWorkoutAnalyze(payload) {
-      const data = payload.data;
-      const tss = payload.source === 'strava' ? activityToTss(data) : itemToTss(data);
-      const durationMin = payload.source === 'strava' ? Number(data.moving_time || 0) / 60 : Number(data.duration_min || 0);
-      const totalMin = Math.max(60, Math.round(durationMin || 60));
-      const points = totalMin * 6;
-      const hr = [];
-      const pwr = [];
-      const cad = [];
-      const spd = [];
-      for (let i = 0; i < points; i += 1) {
-        const t = i / 6;
-        const block = Math.floor(t / 15);
-        const phase = (t % 15) / 15;
-        hr.push(148 + block * 2 + Math.sin(phase * 6.28) * 2);
-        pwr.push(200 + block * 8 + Math.sin(phase * 6.28) * 12);
-        cad.push(82 + block + Math.sin(phase * 6.28) * 1.5);
-        spd.push(22 + block * 0.4 + Math.sin(phase * 6.28) * 0.6);
+    async function renderWorkoutAnalyze(payload) {
+      const data = payload.data || {};
+      if (!data.fit_id) {
+        document.getElementById('wvSelectionKv').innerHTML = '<div>No FIT stream for this workout.</div>';
+        document.querySelector('#wvLapTable tbody').innerHTML = '';
+        document.getElementById('wvChart').innerHTML = '';
+        document.getElementById('wvViewfinder').innerHTML = '';
+        return;
       }
-      const svg = document.getElementById('wvChart');
-      const width = 1120;
-      const height = 280;
-      svg.innerHTML = `
-        <rect x="0" y="0" width="${width}" height="${height}" fill="#f3f7fd" stroke="#d6e1ee"></rect>
-        <path d="${pathFromSeries(hr, width, height)}" stroke="#f35353" stroke-width="2" fill="none"></path>
-        <path d="${pathFromSeries(pwr, width, height)}" stroke="#ff62f2" stroke-width="2" fill="none"></path>
-        <path d="${pathFromSeries(cad, width, height)}" stroke="#f39b1f" stroke-width="2" fill="none"></path>
-        <path d="${pathFromSeries(spd, width, height)}" stroke="#3fa144" stroke-width="2" fill="none"></path>
-        <rect id="wvSelectionRect" x="0" y="0" width="0" height="${height}" fill="rgba(80,150,255,.22)" stroke="rgba(42,102,210,.5)" display="none"></rect>
-      `;
+
+      const resp = await fetch(`/fit/${data.fit_id}`);
+      if (!resp.ok) {
+        document.getElementById('wvSelectionKv').innerHTML = '<div>Could not load FIT data.</div>';
+        return;
+      }
+      const fit = await resp.json();
+      const series = Array.isArray(fit.series) ? fit.series : [];
+      const laps = Array.isArray(fit.laps) ? fit.laps : [];
+      const summary = fit.summary || {};
+      if (!series.length) {
+        document.getElementById('wvSelectionKv').innerHTML = '<div>No FIT points available.</div>';
+        return;
+      }
+
+      const baseMs = new Date(series[0].timestamp).getTime();
+      const pts = series.map((p) => ({
+        t: timeToSec(p.timestamp, baseMs),
+        heart_rate: num(p.heart_rate),
+        speed: num(p.speed),
+        distance: num(p.distance),
+        cadence: num(p.cadence),
+        power: num(p.power),
+        altitude: num(p.altitude),
+      }));
+      const totalSec = Math.max(1, pts[pts.length - 1].t - pts[0].t);
+
+      analyzeState = {
+        pts,
+        laps,
+        totalSec,
+        wStart: 0,
+        wEnd: totalSec,
+      };
+
+      const chart = document.getElementById('wvChart');
+      const finder = document.getElementById('wvViewfinder');
+      const left = 54;
+      const right = 170;
+      const top = 14;
+      const bottom = 28;
+      const w = 1200;
+      const h = 360;
+      const cw = w - left - right;
+      const ch = h - top - bottom;
+      const lineMeta = [
+        { key: 'heart_rate', color: '#f35353', label: 'HR' },
+        { key: 'power', color: '#ff62f2', label: 'W' },
+        { key: 'cadence', color: '#f39b1f', label: 'RPM' },
+        { key: 'speed', color: '#3fa144', label: 'MPH' },
+      ];
+
+      function valPath(meta, inWindow) {
+        const vals = inWindow.map(p => p[meta.key]).filter(v => v !== null);
+        if (!vals.length) return { path: '', min: 0, max: 1, avg: null };
+        const min = Math.min(...vals);
+        const max = Math.max(...vals);
+        const span = Math.max(0.001, max - min);
+        const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
+        let started = false;
+        let d = '';
+        inWindow.forEach((p) => {
+          const v = p[meta.key];
+          if (v === null) return;
+          const x = left + ((p.t - analyzeState.wStart) / Math.max(1, analyzeState.wEnd - analyzeState.wStart)) * cw;
+          const y = top + (1 - ((v - min) / span)) * ch;
+          d += `${started ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)} `;
+          started = true;
+        });
+        return { path: d.trim(), min, max, avg };
+      }
+
+      function inWindow() {
+        return pts.filter(p => p.t >= analyzeState.wStart && p.t <= analyzeState.wEnd);
+      }
+
+      function renderSelectionStats() {
+        const win = inWindow();
+        const duration = Math.max(1, analyzeState.wEnd - analyzeState.wStart);
+        const frac = duration / totalSec;
+        const distance = Number(summary.distance_m || 0) * frac;
+        const mean = (k) => {
+          const vals = win.map(p => p[k]).filter(v => v !== null);
+          return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+        };
+        document.getElementById('wvSelectionKv').innerHTML = `
+          <div>Duration<strong>${hms(duration)}</strong></div>
+          <div>Distance<strong>${fmtDistanceMeters(distance)}</strong></div>
+          <div>Avg HR<strong>${mean('heart_rate') ? Math.round(mean('heart_rate')) : '--'}</strong></div>
+          <div>Avg Power<strong>${mean('power') ? `${Math.round(mean('power'))} W` : '--'}</strong></div>
+          <div>Avg Cadence<strong>${mean('cadence') ? `${Math.round(mean('cadence'))} rpm` : '--'}</strong></div>
+          <div>Avg Speed<strong>${mean('speed') ? fmtAxis(mean('speed'), 'speed') : '--'}</strong></div>
+          <div>Elevation Gain<strong>${summary.elev_gain_m ? fmtElevation(summary.elev_gain_m) : '--'}</strong></div>
+        `;
+      }
+
+      function renderMain() {
+        const win = inWindow();
+        const xTicks = 5;
+        const paths = lineMeta.map(m => ({ ...m, ...valPath(m, win) }));
+        let svg = `<rect x="0" y="0" width="${w}" height="${h}" fill="#f3f7fd" stroke="#d6e1ee"></rect>`;
+        for (let i = 0; i <= xTicks; i += 1) {
+          const x = left + (i / xTicks) * cw;
+          svg += `<line x1="${x}" y1="${top}" x2="${x}" y2="${top + ch}" stroke="#e1eaf5"/>`;
+          const sec = analyzeState.wStart + (i / xTicks) * (analyzeState.wEnd - analyzeState.wStart);
+          svg += `<text x="${x}" y="${h - 8}" fill="#5b7290" font-size="11" text-anchor="middle">${hms(sec)}</text>`;
+        }
+        paths.forEach((p) => {
+          if (p.path) svg += `<path d="${p.path}" stroke="${p.color}" stroke-width="2" fill="none"></path>`;
+        });
+        paths.forEach((p, idx) => {
+          const y = top + 14 + idx * 24;
+          svg += `<text x="${w - right + 6}" y="${y}" fill="${p.color}" font-size="11">${p.label} ${fmtAxis(p.max, p.key)} / ${fmtAxis(p.min, p.key)}</text>`;
+        });
+        chart.innerHTML = svg;
+        renderSelectionStats();
+      }
+
+      function renderFinder() {
+        const fw = 1200;
+        const fh = 90;
+        const px = (t) => (t / totalSec) * fw;
+        const speedVals = pts.map(p => p.speed).filter(v => v !== null);
+        const sMin = speedVals.length ? Math.min(...speedVals) : 0;
+        const sMax = speedVals.length ? Math.max(...speedVals) : 1;
+        const sSpan = Math.max(0.001, sMax - sMin);
+        let d = '';
+        let started = false;
+        pts.forEach((p) => {
+          if (p.speed === null) return;
+          const x = px(p.t);
+          const y = 6 + (1 - ((p.speed - sMin) / sSpan)) * (fh - 24);
+          d += `${started ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)} `;
+          started = true;
+        });
+        const bx = px(analyzeState.wStart);
+        const bw = Math.max(8, px(analyzeState.wEnd) - bx);
+        finder.innerHTML = `
+          <rect x="0" y="0" width="${fw}" height="${fh}" fill="#edf3fb" stroke="#d6e1ee"></rect>
+          <path d="${d}" stroke="#3fa144" stroke-width="1.5" fill="none"></path>
+          <rect id="wvBrush" x="${bx}" y="2" width="${bw}" height="${fh - 4}" fill="rgba(80,150,255,.22)" stroke="#2a66d2"></rect>
+        `;
+      }
+
+      let dragging = false;
+      let dragOffset = 0;
+      finder.onmousedown = (ev) => {
+        const rect = finder.getBoundingClientRect();
+        const x = ((ev.clientX - rect.left) / rect.width) * 1200;
+        const b = finder.querySelector('#wvBrush');
+        const bx = Number(b.getAttribute('x'));
+        const bw = Number(b.getAttribute('width'));
+        if (x >= bx && x <= bx + bw) {
+          dragging = true;
+          dragOffset = x - bx;
+        } else {
+          const center = x / 1200;
+          const span = (analyzeState.wEnd - analyzeState.wStart) / totalSec;
+          let s = Math.max(0, center - span / 2);
+          let e = Math.min(1, center + span / 2);
+          if (e - s < span) s = Math.max(0, e - span);
+          analyzeState.wStart = s * totalSec;
+          analyzeState.wEnd = e * totalSec;
+          renderFinder();
+          renderMain();
+        }
+      };
+      finder.onmousemove = (ev) => {
+        if (!dragging) return;
+        const rect = finder.getBoundingClientRect();
+        const x = ((ev.clientX - rect.left) / rect.width) * 1200;
+        const b = finder.querySelector('#wvBrush');
+        const bw = Number(b.getAttribute('width'));
+        let bx = x - dragOffset;
+        bx = Math.max(0, Math.min(1200 - bw, bx));
+        b.setAttribute('x', String(bx));
+        analyzeState.wStart = (bx / 1200) * totalSec;
+        analyzeState.wEnd = ((bx + bw) / 1200) * totalSec;
+        renderMain();
+      };
+      window.onmouseup = () => { dragging = false; };
 
       const lapBody = document.querySelector('#wvLapTable tbody');
       lapBody.innerHTML = '';
-      const totalSec = Math.max(60, Math.round(durationMin * 60));
-      const lapCount = 5;
-      const lapSec = Math.round(totalSec / lapCount);
-      analyzeState = {
-        hr,
-        pwr,
-        cad,
-        spd,
-        points,
-        totalSec,
-        lapSec,
-        selecting: false,
-        startIndex: 0,
-        endIndex: points - 1,
-      };
-      for (let i = 0; i < lapCount; i += 1) {
+      const lapRows = laps.length ? laps : [{
+        name: 'Lap 1',
+        start: series[0].timestamp,
+        end: series[series.length - 1].timestamp,
+        duration_s: totalSec,
+      }];
+      lapRows.forEach((lap, idx) => {
+        const startSec = Math.max(0, timeToSec(lap.start || series[0].timestamp, baseMs));
+        const endSec = Math.max(startSec, lap.end ? timeToSec(lap.end, baseMs) : (startSec + Number(lap.duration_s || 0)));
         const row = document.createElement('tr');
         row.innerHTML = `
           <td><input type="checkbox" /></td>
-          <td>Lap #${i + 1}</td>
-          <td>${formatDurationMin(lapSec / 60)}</td>
-          <td>${Math.max(1, Math.round(tss / lapCount))}</td>
-          <td>${Math.round(160 + (i - 2) * 3)}</td>
-          <td>${Math.round(280 + (i - 2) * 6)}</td>
+          <td>${lap.name || `Lap #${idx + 1}`}</td>
+          <td>${hms(Number(lap.duration_s || (endSec - startSec)))}</td>
+          <td>${lap.distance_m ? fmtDistanceMeters(lap.distance_m) : '--'}</td>
+          <td>${lap.avg_hr ? Math.round(lap.avg_hr) : '--'}</td>
+          <td>${lap.avg_power ? Math.round(lap.avg_power) : '--'}</td>
         `;
         row.querySelector('input').addEventListener('change', (ev) => {
           row.classList.toggle('selected', ev.target.checked);
-          const checked = Array.from(lapBody.querySelectorAll('input')).map((el, idx) => ({ checked: el.checked, idx })).filter(x => x.checked);
+          const checked = Array.from(lapBody.querySelectorAll('input')).map((el, i) => ({ checked: el.checked, i })).filter(x => x.checked);
           if (!checked.length) {
-            updateAnalyzeSelection(0, analyzeState.points - 1);
-            return;
+            analyzeState.wStart = 0;
+            analyzeState.wEnd = totalSec;
+          } else {
+            const minI = Math.min(...checked.map(c => c.i));
+            const maxI = Math.max(...checked.map(c => c.i));
+            const minLap = lapRows[minI];
+            const maxLap = lapRows[maxI];
+            analyzeState.wStart = Math.max(0, timeToSec(minLap.start || series[0].timestamp, baseMs));
+            analyzeState.wEnd = Math.max(analyzeState.wStart + 1, timeToSec(maxLap.end || series[series.length - 1].timestamp, baseMs));
           }
-          const minLap = Math.min(...checked.map(c => c.idx));
-          const maxLap = Math.max(...checked.map(c => c.idx));
-          const start = Math.floor((minLap * analyzeState.points) / lapCount);
-          const end = Math.floor(((maxLap + 1) * analyzeState.points) / lapCount) - 1;
-          updateAnalyzeSelection(start, end);
+          renderFinder();
+          renderMain();
         });
         lapBody.appendChild(row);
-      }
+      });
 
-      const distanceKm = payload.source === 'strava'
-        ? Number(data.distance || 0) / 1000
-        : Number(data.distance_km || 0);
-      document.getElementById('wvSelectionKv').innerHTML = `
-        <div>Duration<strong>${formatDurationMin(durationMin)}</strong></div>
-        <div>Distance<strong>${distanceKm.toFixed(2)} km</strong></div>
-        <div>TSS<strong>${tss}</strong></div>
-        <div>Avg HR<strong>${Math.round(120 + tss * 0.5)}</strong></div>
-        <div>Avg Power<strong>${Math.round(160 + tss * 1.6)} W</strong></div>
-        <div>Cadence<strong>${Math.round(80 + tss * 0.09)} rpm</strong></div>
-      `;
-
-      const selRect = document.getElementById('wvSelectionRect');
-      function xToIndex(clientX) {
-        const rect = svg.getBoundingClientRect();
-        const rel = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        return Math.round(rel * (analyzeState.points - 1));
-      }
-      svg.onmousedown = (ev) => {
-        analyzeState.selecting = true;
-        analyzeState.startIndex = xToIndex(ev.clientX);
-        analyzeState.endIndex = analyzeState.startIndex;
-        updateAnalyzeSelection(analyzeState.startIndex, analyzeState.endIndex);
-      };
-      window.onmouseup = () => {
-        analyzeState.selecting = false;
-      };
-      svg.onmousemove = (ev) => {
-        if (!analyzeState.selecting) return;
-        analyzeState.endIndex = xToIndex(ev.clientX);
-        updateAnalyzeSelection(analyzeState.startIndex, analyzeState.endIndex);
-      };
-
-      updateAnalyzeSelection(0, analyzeState.points - 1);
-
-      function updateAnalyzeSelection(a, b) {
-        const start = Math.max(0, Math.min(a, b));
-        const end = Math.min(analyzeState.points - 1, Math.max(a, b));
-        const x1 = (start / (analyzeState.points - 1)) * width;
-        const x2 = (end / (analyzeState.points - 1)) * width;
-        selRect.setAttribute('x', String(x1));
-        selRect.setAttribute('width', String(Math.max(2, x2 - x1)));
-        selRect.setAttribute('display', 'block');
-        const segCount = Math.max(1, end - start + 1);
-        const mean = (arr) => arr.slice(start, end + 1).reduce((s, v) => s + v, 0) / segCount;
-        const selSec = Math.round((segCount / analyzeState.points) * analyzeState.totalSec);
-        const totalDist = payload.source === 'strava'
-          ? Number(data.distance || 0) / 1000
-          : Number(data.distance_km || 0);
-        const selDist = totalDist * (selSec / analyzeState.totalSec);
-        const selTss = Math.round(tss * (selSec / analyzeState.totalSec));
-        document.getElementById('wvSelectionKv').innerHTML = `
-          <div>Duration<strong>${formatDurationMin(selSec / 60)}</strong></div>
-          <div>Distance<strong>${selDist.toFixed(2)} km</strong></div>
-          <div>TSS<strong>${selTss}</strong></div>
-          <div>Avg HR<strong>${Math.round(mean(analyzeState.hr))}</strong></div>
-          <div>Avg Power<strong>${Math.round(mean(analyzeState.pwr))} W</strong></div>
-          <div>Cadence<strong>${Math.round(mean(analyzeState.cad))} rpm</strong></div>
-        `;
-      }
+      document.getElementById('wvHrAvg').value = summary.avg_hr ? String(Math.round(summary.avg_hr)) : '';
+      document.getElementById('wvPowerAvg').value = summary.avg_power ? String(Math.round(summary.avg_power)) : '';
+      renderFinder();
+      renderMain();
     }
 
     function renderEvents() {
@@ -2889,9 +3459,9 @@ def page() -> str:
                   return;
                 }
                 const pair = pairByPlannedId.get(String(item.id));
-                const completed = pair ? stravaById.get(String(pair.strava_id)) : null;
+                const completed = pair ? stravaById.get(String(pair.strava_id)) : completedFromPlanned(item);
                 if (completed) shownCompleted.add(String(completed.id));
-                cardsToShow.push({ kind: 'planned', item, completed, pair });
+                cardsToShow.push({ kind: 'planned', item, completed, pair, fromPair: !!pair });
               });
 
               entries.done.forEach(a => {
@@ -2933,14 +3503,17 @@ def page() -> str:
                   card.className = `work-card ${status}`;
                   const plannedLine = `P ${Number(item.duration_min || 0)}m • ${itemToTss(item)} TSS`;
                   const completedLine = completed
-                    ? `C ${formatDurationMin(Number(completed.moving_time || 0) / 60)} • ${activityToTss(completed)} TSS`
+                    ? `C ${formatDurationMin(Number(completed.moving_time || 0) / 60)} • ${Math.round(Number(completed.tss_override || 0) || activityToTss(completed))} TSS`
                     : 'C --';
+                  const feedback = completed && (Number(item.feel || 0) > 0 || Number(item.rpe || 0) > 0)
+                    ? `${feelEmoji(item.feel)}${Number(item.rpe || 0) > 0 ? ` RPE ${item.rpe}` : ''}`
+                    : '';
                   const arrow = comp.arrow === 'up' ? '<span class="delta-up">↑</span>' : comp.arrow === 'down' ? '<span class="delta-down">↓</span>' : '';
                   card.innerHTML = `
                     <button class="card-menu-btn" type="button">&#8942;</button>
-                    <p class="wc-title">${item.title || (item.workout_type || 'Workout')}</p>
+                    <p class="wc-title">${cardIcon(item.workout_type)}${item.title || (item.workout_type || 'Workout')}</p>
                     <p class="wc-meta">${item.workout_type || 'Workout'} • ${plannedLine}</p>
-                    <p class="wc-meta">${completedLine} ${arrow}</p>
+                    <p class="wc-meta">${completedLine} ${arrow} ${feedback}</p>
                   `;
                   card.draggable = true;
                   card.dataset.kind = 'planned';
@@ -2960,7 +3533,8 @@ def page() -> str:
                   });
                   card.addEventListener('click', (ev) => {
                     ev.stopPropagation();
-                    openWorkoutModal({ source: completed ? 'strava' : 'planned', data: completed || item, planned: item, pair: entry.pair });
+                    const source = entry.fromPair && completed ? 'strava' : 'planned';
+                    openWorkoutModal({ source, data: source === 'strava' ? completed : item, planned: item, pair: entry.pair });
                   });
                   card.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'planned', data: item }));
                   card.querySelector('.card-menu-btn').addEventListener('click', (ev) => showItemMenu(ev, { source: 'planned', data: item }));
@@ -2975,8 +3549,8 @@ def page() -> str:
                 card.className = `work-card ${compStat}`;
                 card.innerHTML = `
                   <button class="card-menu-btn" type="button">&#8942;</button>
-                  <p class="wc-title">${a.name || 'Completed Workout'}</p>
-                  <p class="wc-meta">${a.type || 'Workout'} • ${formatDurationMin(Number(a.moving_time || 0) / 60)} • ${activityToTss(a)} TSS</p>
+                  <p class="wc-title">${cardIcon(a.type)}${a.name || 'Completed Workout'}</p>
+                  <p class="wc-meta">${a.type || 'Workout'} • ${formatDurationMin(Number(a.moving_time || 0) / 60)} • ${activityToTss(a)} TSS ${feelEmoji(a.feel)} ${Number(a.rpe || 0) > 0 ? `RPE ${a.rpe}` : ''}</p>
                 `;
                 card.draggable = true;
                 card.dataset.kind = 'strava';
@@ -3120,6 +3694,21 @@ def page() -> str:
     });
 
     document.getElementById('jumpToday').addEventListener('click', jumpToCurrentMonth);
+    document.getElementById('distanceUnitBtn').addEventListener('click', () => {
+      distanceUnit = distanceUnit === 'km' ? 'mi' : distanceUnit === 'mi' ? 'm' : 'km';
+      localStorage.setItem('distanceUnit', distanceUnit);
+      updateUnitButtons();
+      renderHome();
+      renderCalendar();
+    });
+    document.getElementById('elevationUnitBtn').addEventListener('click', () => {
+      elevationUnit = elevationUnit === 'm' ? 'ft' : 'm';
+      localStorage.setItem('elevationUnit', elevationUnit);
+      updateUnitButtons();
+      if (!document.getElementById('wvAnalyze').classList.contains('hidden') && window.currentWorkoutPayload) {
+        renderWorkoutAnalyze(window.currentWorkoutPayload);
+      }
+    });
     document.getElementById('uploadFitBtn').addEventListener('click', () => {
       document.getElementById('uploadFitInput').click();
     });
@@ -3162,6 +3751,27 @@ def page() -> str:
     });
 
     document.getElementById('closeWorkoutView').addEventListener('click', closeWorkoutModal);
+    document.getElementById('cancelWorkoutView').addEventListener('click', closeWorkoutModal);
+    document.getElementById('saveCloseWorkoutView').addEventListener('click', saveWorkoutViewAndClose);
+    document.getElementById('deleteWorkoutView').addEventListener('click', async () => {
+      const payload = window.currentWorkoutPayload;
+      if (!payload) return;
+      const data = payload.data || {};
+      if (payload.planned || payload.source === 'planned') {
+        const targetId = payload.planned ? payload.planned.id : data.id;
+        await fetch(`/calendar-items/${targetId}`, { method: 'DELETE' });
+      } else if (payload.source === 'strava') {
+        await fetch(`/activities/${data.id}`, { method: 'DELETE' });
+      }
+      closeWorkoutModal();
+      await loadData(false);
+    });
+    document.querySelectorAll('.feel-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        setFeelValue(btn.dataset.feel);
+      });
+    });
     document.getElementById('workoutViewModal').addEventListener('click', (event) => {
       if (event.target.id === 'workoutViewModal') closeWorkoutModal();
     });
@@ -3178,6 +3788,7 @@ def page() -> str:
     buildTypeGrids();
     bindWidgetToggles();
     applyWidgetPrefs();
+    updateUnitButtons();
     setView('home');
     loadData(true);
   </script>
@@ -3277,6 +3888,9 @@ def ui_activities() -> list[dict[str, Any]]:
             updated["start_date_local"] = f"{override['date']}{time_part}"
         if "title" in override:
             updated["name"] = str(override["title"])
+        for k in ["description", "comments", "feel", "rpe", "tss_override"]:
+            if k in override:
+                updated[k] = override[k]
         if override.get("hidden"):
             continue
         out.append(updated)
@@ -3286,9 +3900,19 @@ def ui_activities() -> list[dict[str, Any]]:
 @app.delete("/activities/{activity_id}")
 def delete_activity_local(activity_id: str) -> dict[str, bool]:
     imported = load_imported_activities()
+    removed = next((a for a in imported if str(a.get("id")) == activity_id), None)
     filtered = [a for a in imported if str(a.get("id")) != activity_id]
     if len(filtered) != len(imported):
         save_imported_activities(filtered)
+    if removed:
+        fit_id = str(removed.get("fit_id") or "").strip()
+        if fit_id:
+            parsed_path = FIT_PARSED_DIR / f"{fit_id}.json"
+            if parsed_path.exists():
+                parsed_path.unlink()
+            fit_path = Path("data/imports") / f"{fit_id}.fit"
+            if fit_path.exists():
+                fit_path.unlink()
     overrides = load_activity_overrides()
     current = overrides.get(activity_id, {})
     current["hidden"] = True
@@ -3317,23 +3941,64 @@ async def import_fit(request: Request, filename: str = Query(default="workout.fi
     imports_dir.mkdir(parents=True, exist_ok=True)
     saved_path = imports_dir / f"{file_id}.fit"
     saved_path.write_bytes(content)
+    try:
+        parsed = parse_fit_bytes_to_json(content)
+    except HTTPException:
+        raise
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=f"Failed to parse FIT: {err}") from err
+    save_fit_parsed(file_id, parsed)
 
     safe_name = Path(filename).name
     name = Path(safe_name).stem.replace("_", " ").replace("-", " ").strip() or "Imported Workout"
+    summary = parsed.get("summary", {})
+    start_iso = str(summary.get("start") or f"{date.today().isoformat()}T08:00:00")
+    distance_m = float(summary.get("distance_m") or 0)
+    duration_s = float(summary.get("duration_s") or 0)
+    sport = str(summary.get("sport") or "Ride").title()
     item = {
         "id": f"imported-{file_id}",
         "name": name.title(),
-        "type": "Ride",
-        "distance": 0,
-        "moving_time": 0,
-        "start_date_local": f"{date.today().isoformat()}T08:00:00",
+        "type": sport,
+        "distance": distance_m,
+        "moving_time": duration_s,
+        "start_date_local": start_iso,
         "description": f"Imported from {safe_name}",
         "source": "fit",
+        "fit_id": file_id,
     }
     imported = load_imported_activities()
     imported.append(item)
     save_imported_activities(imported)
     return item
+
+
+@app.get("/fit/{fit_id}")
+def get_fit_parsed(fit_id: str) -> dict[str, Any]:
+    return load_fit_parsed(fit_id)
+
+
+@app.put("/activities/{activity_id}/meta")
+def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, bool]:
+    overrides = load_activity_overrides()
+    current = overrides.get(activity_id, {})
+    if "description" in payload:
+        current["description"] = str(payload.get("description", ""))
+    if "comments" in payload:
+        current["comments"] = str(payload.get("comments", ""))
+    if "feel" in payload:
+        try:
+            current["feel"] = max(0, min(5, int(payload.get("feel") or 0)))
+        except (TypeError, ValueError):
+            current["feel"] = 0
+    if "rpe" in payload:
+        try:
+            current["rpe"] = max(0, min(10, int(payload.get("rpe") or 0)))
+        except (TypeError, ValueError):
+            current["rpe"] = 0
+    overrides[activity_id] = current
+    save_activity_overrides(overrides)
+    return {"ok": True}
 
 
 @app.get("/calendar-items")
@@ -3367,6 +4032,30 @@ def update_calendar_item(item_id: str, payload: dict[str, Any] = Body(...)) -> d
     items[idx] = normalized
     save_calendar_items(items)
     return normalized
+
+
+@app.put("/calendar-items/{item_id}/completed")
+def update_calendar_item_completed(item_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    items = load_calendar_items()
+    idx = next((i for i, row in enumerate(items) if row.get("id") == item_id), -1)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    item = items[idx]
+    if item.get("kind") != "workout":
+        raise HTTPException(status_code=400, detail="Only workout items support completed values.")
+
+    def n(v: Any) -> float:
+        try:
+            return max(0.0, float(v or 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    item["completed_duration_min"] = n(payload.get("completed_duration_min"))
+    item["completed_distance_km"] = n(payload.get("completed_distance_km"))
+    item["completed_tss"] = n(payload.get("completed_tss"))
+    items[idx] = item
+    save_calendar_items(items)
+    return item
 
 
 @app.delete("/calendar-items/{item_id}")
@@ -3459,6 +4148,12 @@ def get_planned_workouts() -> list[dict[str, Any]]:
             "planned_duration_min": i.get("duration_min", 0),
             "planned_distance_km": i.get("distance_km", 0),
             "planned_intensity": i.get("intensity", 6),
+            "completed_duration_min": i.get("completed_duration_min", 0),
+            "completed_distance_km": i.get("completed_distance_km", 0),
+            "completed_tss": i.get("completed_tss", 0),
+            "comments": i.get("comments", ""),
+            "feel": i.get("feel", 0),
+            "rpe": i.get("rpe", 0),
             "description": i.get("description", ""),
             "created_at": i.get("created_at"),
         }
@@ -3476,6 +4171,12 @@ def create_planned_workout(payload: dict[str, Any] = Body(...)) -> dict[str, Any
         "duration_min": payload.get("planned_duration_min", 0),
         "distance_km": payload.get("planned_distance_km", 0),
         "intensity": payload.get("planned_intensity", 6),
+        "completed_duration_min": payload.get("completed_duration_min", 0),
+        "completed_distance_km": payload.get("completed_distance_km", 0),
+        "completed_tss": payload.get("completed_tss", 0),
+        "comments": payload.get("comments", ""),
+        "feel": payload.get("feel", 0),
+        "rpe": payload.get("rpe", 0),
         "description": payload.get("description", ""),
     }
     item = normalize_item(wrapped)
