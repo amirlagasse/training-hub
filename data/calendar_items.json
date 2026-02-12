@@ -1,20 +1,23 @@
 [
   {
-    "id": "3f8045cb-544f-49f7-a334-c065901b19ad",
+    "id": "7280dd92-c28b-4762-97a4-3d7e91a3bbbb",
     "kind": "workout",
-    "date": "2026-02-11",
+    "date": "2026-02-12",
     "title": "Untitled Workout",
     "description": "Imported from tp-4211127.2026-02-11-16-27-52-954Z.GarminPing.AAAAAGmMrggx9xgk.FIT",
-    "created_at": "2026-02-12T03:08:41Z",
-    "workout_type": "Bike",
-    "duration_min": 90.0,
+    "created_at": "2026-02-12T16:26:47Z",
+    "workout_type": "XC-Ski",
+    "duration_min": 100.0,
     "distance_km": 0.0,
     "intensity": 6.0,
     "completed_duration_min": 90.0,
     "completed_distance_km": 0.0,
     "completed_tss": 73.0,
-    "comments": "sfwdfsfsdsdfsfsd`1`1",
-    "feel": 3,
-    "rpe": 8
+    "completed_if": 0.0,
+    "planned_if": 1.0,
+    "planned_tss": 167.0,
+    "comments": "",
+    "feel": 0,
+    "rpe": 0
   }
 ]

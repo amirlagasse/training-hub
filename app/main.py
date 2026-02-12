@@ -24,6 +24,7 @@ PAIRS_FILE = Path("data/workout_pairs.json")
 ACTIVITY_OVERRIDES_FILE = Path("data/activity_overrides.json")
 IMPORTED_ACTIVITIES_FILE = Path("data/imported_activities.json")
 FIT_PARSED_DIR = Path("data/fit_parsed")
+SETTINGS_FILE = Path("data/settings.json")
 PLANNED_FILE = Path("data/planned_workouts.json")
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 STRAVA_ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
@@ -199,6 +200,83 @@ def save_imported_activities(items: list[dict[str, Any]]) -> None:
     write_json_file(IMPORTED_ACTIVITIES_FILE, items)
 
 
+def default_settings() -> dict[str, Any]:
+    return {
+        "units": {"distance": "km", "elevation": "m"},
+        "ftp": {
+            "ride": None,
+            "run": None,
+            "swim": None,
+            "row": None,
+            "strength": None,
+            "other": None,
+        },
+        "lthr": {"run": None, "ride": None},
+    }
+
+
+def sanitize_ftp_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    return max(50.0, min(600.0, n))
+
+
+def load_settings() -> dict[str, Any]:
+    raw = read_json_file(SETTINGS_FILE, {})
+    settings = default_settings()
+    if isinstance(raw, dict):
+        units = raw.get("units", {})
+        if isinstance(units, dict):
+            if units.get("distance") in {"km", "mi", "m"}:
+                settings["units"]["distance"] = units.get("distance")
+            if units.get("elevation") in {"m", "ft"}:
+                settings["units"]["elevation"] = units.get("elevation")
+        ftp = raw.get("ftp", {})
+        if isinstance(ftp, dict):
+            for key in settings["ftp"].keys():
+                settings["ftp"][key] = sanitize_ftp_value(ftp.get(key))
+    return settings
+
+
+def save_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    merged = default_settings()
+    units = settings.get("units", {})
+    if isinstance(units, dict):
+        if units.get("distance") in {"km", "mi", "m"}:
+            merged["units"]["distance"] = units.get("distance")
+        if units.get("elevation") in {"m", "ft"}:
+            merged["units"]["elevation"] = units.get("elevation")
+    ftp = settings.get("ftp", {})
+    if isinstance(ftp, dict):
+        for key in merged["ftp"].keys():
+            merged["ftp"][key] = sanitize_ftp_value(ftp.get(key))
+    write_json_file(SETTINGS_FILE, merged)
+    return merged
+
+
+def sport_to_ftp_key(sport: str) -> str:
+    s = str(sport or "").lower()
+    if "ride" in s or "cycle" in s or "bike" in s:
+        return "ride"
+    if "run" in s or "walk" in s:
+        return "run"
+    if "swim" in s:
+        return "swim"
+    if "row" in s:
+        return "row"
+    if "strength" in s or "weight" in s:
+        return "strength"
+    return "other"
+
+
 def _as_float(v: Any) -> float | None:
     if v is None:
         return None
@@ -229,16 +307,16 @@ def _max(values: list[float]) -> float | None:
     return max(values)
 
 
-def parse_fit_file_to_json(path: Path) -> dict[str, Any]:
+def parse_fit_file_to_json(path: Path, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     with path.open("rb") as handle:
-        return parse_fit_stream_to_json(handle)
+        return parse_fit_stream_to_json(handle, settings=settings)
 
 
-def parse_fit_bytes_to_json(content: bytes) -> dict[str, Any]:
-    return parse_fit_stream_to_json(io.BytesIO(content))
+def parse_fit_bytes_to_json(content: bytes, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    return parse_fit_stream_to_json(io.BytesIO(content), settings=settings)
 
 
-def parse_fit_stream_to_json(stream: Any) -> dict[str, Any]:
+def parse_fit_stream_to_json(stream: Any, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     # Analysis pipeline source of truth:
     # records -> chart series points, laps -> lap table and lap-range selection.
     fit = FitFile(stream)
@@ -345,6 +423,20 @@ def parse_fit_stream_to_json(stream: Any) -> dict[str, Any]:
             }
         )
 
+    ftp_key = sport_to_ftp_key(sport)
+    ftp_value = None
+    if settings:
+        ftp_value = sanitize_ftp_value((settings.get("ftp") or {}).get(ftp_key))
+    if_value = None
+    if ftp_value and (_as_float(session_values.get("avg_power")) or _mean(power_values)):
+        avg_p = _as_float(session_values.get("avg_power")) or _mean(power_values) or 0
+        if avg_p > 0:
+            if_value = avg_p / ftp_value
+    tss_value = None
+    if if_value and duration_s > 0:
+        hours = duration_s / 3600.0
+        tss_value = hours * if_value * if_value * 100.0
+
     return {
         "summary": {
             "start": first_ts.isoformat(),
@@ -361,6 +453,10 @@ def parse_fit_stream_to_json(stream: Any) -> dict[str, Any]:
             "max_cadence": _as_float(session_values.get("max_cadence")) or _max(cadence_values),
             "elev_gain_m": _as_float(session_values.get("total_ascent")),
             "sport": sport,
+            "sport_key": ftp_key,
+            "ftp": ftp_value,
+            "if": if_value,
+            "tss": tss_value,
         },
         "series": points,
         "laps": laps,
@@ -432,6 +528,9 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
             completed_duration = float(payload.get("completed_duration_min", 0) or 0)
             completed_distance = float(payload.get("completed_distance_km", 0) or 0)
             completed_tss = float(payload.get("completed_tss", 0) or 0)
+            completed_if = float(payload.get("completed_if", 0) or 0)
+            planned_if = float(payload.get("planned_if", 0) or 0)
+            planned_tss = float(payload.get("planned_tss", 0) or 0)
         except (TypeError, ValueError) as err:
             raise HTTPException(status_code=400, detail="Workout values must be numeric.") from err
 
@@ -442,6 +541,9 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
         item["completed_duration_min"] = max(0.0, completed_duration)
         item["completed_distance_km"] = max(0.0, completed_distance)
         item["completed_tss"] = max(0.0, completed_tss)
+        item["completed_if"] = max(0.0, completed_if)
+        item["planned_if"] = max(0.0, planned_if)
+        item["planned_tss"] = max(0.0, planned_tss)
         item["comments"] = str(payload.get("comments", "")).strip()
         feel = payload.get("feel")
         try:
@@ -1668,6 +1770,7 @@ def page() -> str:
       <button class="tab active" data-view="home">Home</button>
       <button class="tab" data-view="calendar">Calendar</button>
       <button class="tab" data-view="dashboard">Dashboard</button>
+      <button class="tab" data-view="settings">Settings</button>
     </nav>
     <div class="nav-right">
       <button class="import-btn" id="uploadFitBtn">Import FIT</button>
@@ -1802,6 +1905,24 @@ def page() -> str:
         </div>
       </div>
     </section>
+
+    <section id="view-settings" class="view">
+      <div class="panel" style="max-width:760px;">
+        <h3 class="panel-title"><span>FTP Settings</span></h3>
+        <div class="grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+          <div class="field"><label>Bike FTP (W)</label><input id="ftpRide" type="number" min="50" max="600" placeholder="--" /></div>
+          <div class="field"><label>Run FTP (optional)</label><input id="ftpRun" type="number" min="50" max="600" placeholder="--" /></div>
+          <div class="field"><label>Row FTP (W)</label><input id="ftpRow" type="number" min="50" max="600" placeholder="--" /></div>
+          <div class="field"><label>Swim FTP (optional)</label><input id="ftpSwim" type="number" min="50" max="600" placeholder="--" /></div>
+          <div class="field"><label>Strength FTP (optional)</label><input id="ftpStrength" type="number" min="50" max="600" placeholder="--" /></div>
+          <div class="field"><label>Other FTP</label><input id="ftpOther" type="number" min="50" max="600" placeholder="--" /></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+          <button class="btn primary" id="saveSettingsBtn">Save</button>
+          <span id="settingsSavedMsg" class="meta" style="display:none;color:#17733e;">Saved</span>
+        </div>
+      </div>
+    </section>
   </main>
 
   <div id="actionModal" class="modal">
@@ -1868,6 +1989,12 @@ def page() -> str:
                     <input class="tp-in readonly" readonly />
                     <input class="tp-in readonly" readonly />
                     <div class="tp-unit">TSS</div>
+                  </div>
+                  <div class="tp-row">
+                    <label>IF</label>
+                    <input class="tp-in readonly" readonly />
+                    <input class="tp-in readonly" readonly />
+                    <div class="tp-unit">IF</div>
                   </div>
                   <div class="tp-minmax-head">
                     <div></div><div>Min</div><div>Avg</div><div>Max</div><div></div>
@@ -2006,6 +2133,12 @@ def page() -> str:
                       <input id="pcTssPlan" class="tp-in" />
                       <input id="pcTssComp" class="tp-in" />
                       <div class="tp-unit">TSS</div>
+                    </div>
+                    <div class="tp-row">
+                      <label>IF</label>
+                      <input id="pcIfPlan" class="tp-in" />
+                      <input id="pcIfComp" class="tp-in" />
+                      <div class="tp-unit">IF</div>
                     </div>
                     <div class="tp-minmax-head">
                       <div></div><div>Min</div><div>Avg</div><div>Max</div><div></div>
@@ -2179,6 +2312,7 @@ def page() -> str:
     let editingItemId = null;
     let analyzeState = null;
     let initialMonthCentered = false;
+    let appSettings = { units: { distance: 'km', elevation: 'm' }, ftp: {} };
     let distanceUnit = localStorage.getItem('distanceUnit') || 'km';
     let elevationUnit = localStorage.getItem('elevationUnit') || 'm';
     let currentFeel = 0;
@@ -2276,6 +2410,22 @@ def page() -> str:
       return map[type] || 0.7;
     }
 
+    function activitySportKey(activity) {
+      const t = String(activity.type || activity.sport_key || '').toLowerCase();
+      if (t.includes('ride') || t.includes('cycle') || t.includes('bike')) return 'ride';
+      if (t.includes('run') || t.includes('walk')) return 'run';
+      if (t.includes('swim')) return 'swim';
+      if (t.includes('row')) return 'row';
+      if (t.includes('strength')) return 'strength';
+      return 'other';
+    }
+
+    function ftpForActivity(activity) {
+      const key = activitySportKey(activity);
+      const ftp = Number((appSettings.ftp || {})[key] || 0);
+      return ftp > 0 ? ftp : null;
+    }
+
     function estimateTss(durationMin, intensity) {
       const durH = Math.max(0, Number(durationMin || 0)) / 60;
       const ifac = Math.max(0.2, Number(intensity || 0.7));
@@ -2283,14 +2433,45 @@ def page() -> str:
     }
 
     function activityToTss(activity) {
+      if (Number(activity.tss_override || 0) > 0) return Number(activity.tss_override);
+      const ifv = activityIF(activity);
+      const durationH = Number(activity.moving_time || 0) / 3600;
+      if (ifv && durationH > 0) return durationH * ifv * ifv * 100;
       return estimateTss(Number(activity.moving_time || 0) / 60, intensityByType(activity.type || 'Other'));
     }
 
     function itemToTss(item) {
       if (item.kind !== 'workout') return 0;
+      const plannedTss = Number(item.planned_tss || 0);
+      if (plannedTss > 0) return plannedTss;
       const userIntensity = Number(item.intensity || 0);
       const intensity = userIntensity > 0 ? (0.4 + Math.min(10, userIntensity) / 10) : intensityByType(item.workout_type || 'Other');
       return estimateTss(Number(item.duration_min || 0), intensity);
+    }
+
+    function plannedIF(item) {
+      const ifv = Number(item.planned_if || 0);
+      if (ifv > 0) return ifv;
+      const tss = Number(item.planned_tss || 0);
+      const hours = Number(item.duration_min || 0) / 60;
+      if (tss > 0 && hours > 0) return Math.sqrt(tss / (hours * 100));
+      return null;
+    }
+
+    function completedIF(obj) {
+      const ifv = Number(obj.if_value || obj.completed_if || 0);
+      if (ifv > 0) return ifv;
+      const tss = Number(obj.tss_override || obj.completed_tss || 0);
+      const hours = Number(obj.moving_time || (Number(obj.completed_duration_min || 0) * 60) || 0) / 3600;
+      if (tss > 0 && hours > 0) return Math.sqrt(tss / (hours * 100));
+      const ftp = ftpForActivity(obj);
+      const avgP = Number(obj.avg_power || 0);
+      if (ftp && avgP > 0) return avgP / ftp;
+      return null;
+    }
+
+    function activityIF(activity) {
+      return completedIF(activity);
     }
 
     function pairForPlanned(plannedId) {
@@ -2311,17 +2492,27 @@ def page() -> str:
       const dur = Number(plannedItem.completed_duration_min || 0);
       const dist = Number(plannedItem.completed_distance_km || 0);
       const tss = Number(plannedItem.completed_tss || 0);
-      if (dur <= 0 && dist <= 0 && tss <= 0) return null;
+      const ifv = Number(plannedItem.completed_if || 0);
+      if (dur <= 0 && dist <= 0 && tss <= 0 && ifv <= 0) return null;
       return {
         moving_time: dur * 60,
         distance: dist * 1000,
         tss_override: tss,
+        if_value: ifv,
+        type: plannedItem.workout_type || 'Workout',
       };
     }
 
     function completedMetric(completedItem, basis) {
       if (basis === 'distance') return Number(completedItem.distance || 0) / 1000;
-      if (basis === 'tss') return Number(completedItem.tss_override || 0) || activityToTss(completedItem);
+      if (basis === 'tss') {
+        const override = Number(completedItem.tss_override || 0);
+        if (override > 0) return override;
+        const ifv = Number(completedItem.if_value || 0);
+        const h = Number(completedItem.moving_time || 0) / 3600;
+        if (ifv > 0 && h > 0) return h * ifv * ifv * 100;
+        return activityToTss(completedItem);
+      }
       return Number(completedItem.moving_time || 0) / 60;
     }
 
@@ -2877,9 +3068,14 @@ def page() -> str:
       const targetPlanned = payload.planned || (payload.source === 'planned' ? data : null);
       const description = document.getElementById('wvDescription').value;
       const comments = document.getElementById('wvComments').value;
+      const plannedDuration = parseDurationToMin(document.getElementById('pcDurPlan').value);
+      const plannedDistanceKm = fromDisplayDistanceToKm(document.getElementById('pcDistPlan').value);
+      const plannedTss = Number(document.getElementById('pcTssPlan').value || 0);
+      const plannedIf = Number(document.getElementById('pcIfPlan').value || 0);
       const completedDuration = parseDurationToMin(document.getElementById('pcDurComp').value);
       const completedDistanceKm = fromDisplayDistanceToKm(document.getElementById('pcDistComp').value);
       const completedTss = Number(document.getElementById('pcTssComp').value || 0);
+      const completedIf = Number(document.getElementById('pcIfComp').value || 0);
       const rpe = Number(document.getElementById('wvRpe').value || 0);
       const hasCompleted = completedDuration > 0 || completedDistanceKm > 0 || completedTss > 0 || payload.source === 'strava';
       const feel = hasCompleted ? currentFeel : 0;
@@ -2891,6 +3087,10 @@ def page() -> str:
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ...targetPlanned,
+            duration_min: plannedDuration,
+            distance_km: plannedDistanceKm,
+            planned_tss: plannedTss,
+            planned_if: plannedIf,
             description,
             comments,
             feel,
@@ -2898,13 +3098,14 @@ def page() -> str:
             completed_duration_min: completedDuration,
             completed_distance_km: completedDistanceKm,
             completed_tss: completedTss,
+            completed_if: completedIf,
           }),
         });
       } else if (payload.source === 'strava') {
         await fetch(`/activities/${data.id}/meta`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ description, comments, feel, rpe: rpeOut }),
+          body: JSON.stringify({ description, comments, feel, rpe: rpeOut, if_value: completedIf, tss_override: completedTss }),
         });
       }
       closeWorkoutModal();
@@ -2983,13 +3184,24 @@ def page() -> str:
       setFeelValue((parentPlanned && parentPlanned.feel) || data.feel || 0);
       const plannedDuration = parentPlanned ? Number(parentPlanned.duration_min || 0) : Number(data.duration_min || 0);
       const plannedDistance = parentPlanned ? Number(parentPlanned.distance_km || 0) : Number(data.distance_km || 0);
-      const plannedTss = parentPlanned ? itemToTss(parentPlanned) : itemToTss(data);
+      const plannedObj = parentPlanned || data;
+      const plannedTss = Number(plannedObj.planned_tss || 0) || (parentPlanned ? itemToTss(parentPlanned) : itemToTss(data));
+      const plannedIf = plannedIF(plannedObj);
+      const completedIf = payload.source === 'strava' ? activityIF(data) : completedIF({
+        completed_if: plannedObj.completed_if,
+        completed_tss: completedTss,
+        moving_time: completedDurationMin * 60,
+        avg_power: data.avg_power,
+        type: plannedObj.workout_type || data.type,
+      });
       document.getElementById('pcDurPlan').value = plannedDuration ? formatDurationMin(plannedDuration) : '--';
       document.getElementById('pcDurComp').value = completedDurationMin ? formatDurationMin(completedDurationMin) : '';
       document.getElementById('pcDistPlan').value = plannedDistance ? `${toDisplayDistanceFromKm(plannedDistance).value.toFixed(distanceUnit === 'm' ? 0 : 1)}` : '--';
       document.getElementById('pcDistComp').value = completedDistanceKm ? `${toDisplayDistanceFromKm(completedDistanceKm).value.toFixed(distanceUnit === 'm' ? 0 : 1)}` : '';
       document.getElementById('pcTssPlan').value = plannedTss ? String(plannedTss) : '--';
       document.getElementById('pcTssComp').value = completedTss ? String(Math.round(completedTss)) : '';
+      document.getElementById('pcIfPlan').value = plannedIf ? Number(plannedIf).toFixed(2) : '';
+      document.getElementById('pcIfComp').value = completedIf ? Number(completedIf).toFixed(2) : '';
       const fitSummary = data.fit_id ? null : null;
       document.getElementById('wvHrAvg').value = completedTss ? String(Math.round(120 + completedTss * 0.5)) : '';
       document.getElementById('wvPowerAvg').value = completedTss ? String(Math.round(150 + completedTss * 1.8)) : '';
@@ -3003,10 +3215,10 @@ def page() -> str:
       }
 
       const canEditCompleted = payload.source !== 'strava' && (parentPlanned || data.kind === 'workout');
-      ['pcDurComp', 'pcDistComp', 'pcTssComp'].forEach((id) => {
+      ['pcDurComp', 'pcDistComp', 'pcTssComp', 'pcIfComp', 'pcDurPlan', 'pcDistPlan', 'pcTssPlan', 'pcIfPlan'].forEach((id) => {
         const el = document.getElementById(id);
         el.readOnly = false;
-        el.classList.toggle('muted', !el.value);
+        el.classList.toggle('muted', !el.value || el.value === '--');
         el.oninput = () => el.classList.toggle('muted', !el.value);
       });
       if (canEditCompleted) {
@@ -3021,8 +3233,31 @@ def page() -> str:
           }
           return Number(text || 0);
         };
+        const recalc = () => {
+          const durCompH = parseDur(document.getElementById('pcDurComp').value) / 60;
+          const tssComp = Number(document.getElementById('pcTssComp').value || 0);
+          const ifComp = Number(document.getElementById('pcIfComp').value || 0);
+          if (durCompH > 0) {
+            if (ifComp > 0) {
+              document.getElementById('pcTssComp').value = (durCompH * ifComp * ifComp * 100).toFixed(1);
+            } else if (tssComp > 0) {
+              document.getElementById('pcIfComp').value = Math.sqrt(tssComp / (durCompH * 100)).toFixed(2);
+            }
+          }
+          const durPlanH = parseDur(document.getElementById('pcDurPlan').value) / 60;
+          const tssPlan = Number(document.getElementById('pcTssPlan').value || 0);
+          const ifPlan = Number(document.getElementById('pcIfPlan').value || 0);
+          if (durPlanH > 0) {
+            if (ifPlan > 0) {
+              document.getElementById('pcTssPlan').value = (durPlanH * ifPlan * ifPlan * 100).toFixed(1);
+            } else if (tssPlan > 0) {
+              document.getElementById('pcIfPlan').value = Math.sqrt(tssPlan / (durPlanH * 100)).toFixed(2);
+            }
+          }
+        };
         const save = () => {
           clearTimeout(timer);
+          recalc();
           timer = setTimeout(async () => {
             await fetch(`/calendar-items/${target.id}/completed`, {
               method: 'PUT',
@@ -3031,6 +3266,7 @@ def page() -> str:
                 completed_duration_min: parseDur(document.getElementById('pcDurComp').value),
                 completed_distance_km: fromDisplayDistanceToKm(document.getElementById('pcDistComp').value),
                 completed_tss: Number(document.getElementById('pcTssComp').value || 0),
+                completed_if: Number(document.getElementById('pcIfComp').value || 0),
               }),
             });
             await loadData(false);
@@ -3039,6 +3275,7 @@ def page() -> str:
         document.getElementById('pcDurComp').onchange = save;
         document.getElementById('pcDistComp').onchange = save;
         document.getElementById('pcTssComp').onchange = save;
+        document.getElementById('pcIfComp').onchange = save;
       }
     }
 
@@ -3501,9 +3738,11 @@ def page() -> str:
                   const status = comp.cls;
                   const card = document.createElement('div');
                   card.className = `work-card ${status}`;
-                  const plannedLine = `P ${Number(item.duration_min || 0)}m • ${itemToTss(item)} TSS`;
+                  const pIf = plannedIF(item);
+                  const plannedLine = `P ${Number(item.duration_min || 0)}m • ${itemToTss(item).toFixed ? itemToTss(item).toFixed(0) : itemToTss(item)} TSS${pIf ? ` • IF ${Number(pIf).toFixed(2)}` : ''}`;
+                  const cIf = completed ? completedIF(completed) : null;
                   const completedLine = completed
-                    ? `C ${formatDurationMin(Number(completed.moving_time || 0) / 60)} • ${Math.round(Number(completed.tss_override || 0) || activityToTss(completed))} TSS`
+                    ? `C ${formatDurationMin(Number(completed.moving_time || 0) / 60)} • ${Math.round(Number(completed.tss_override || 0) || activityToTss(completed))} TSS${cIf ? ` • IF ${Number(cIf).toFixed(2)}` : ''}`
                     : 'C --';
                   const feedback = completed && (Number(item.feel || 0) > 0 || Number(item.rpe || 0) > 0)
                     ? `${feelEmoji(item.feel)}${Number(item.rpe || 0) > 0 ? ` RPE ${item.rpe}` : ''}`
@@ -3550,7 +3789,7 @@ def page() -> str:
                 card.innerHTML = `
                   <button class="card-menu-btn" type="button">&#8942;</button>
                   <p class="wc-title">${cardIcon(a.type)}${a.name || 'Completed Workout'}</p>
-                  <p class="wc-meta">${a.type || 'Workout'} • ${formatDurationMin(Number(a.moving_time || 0) / 60)} • ${activityToTss(a)} TSS ${feelEmoji(a.feel)} ${Number(a.rpe || 0) > 0 ? `RPE ${a.rpe}` : ''}</p>
+                  <p class="wc-meta">${a.type || 'Workout'} • ${formatDurationMin(Number(a.moving_time || 0) / 60)} • ${activityToTss(a).toFixed ? activityToTss(a).toFixed(0) : activityToTss(a)} TSS${activityIF(a) ? ` • IF ${Number(activityIF(a)).toFixed(2)}` : ''} ${feelEmoji(a.feel)} ${Number(a.rpe || 0) > 0 ? `RPE ${a.rpe}` : ''}</p>
                 `;
                 card.draggable = true;
                 card.dataset.kind = 'strava';
@@ -3648,6 +3887,22 @@ def page() -> str:
       document.getElementById('statTime').textContent = fmtHours(totalTime);
     }
 
+    function renderSettings() {
+      const ftp = appSettings.ftp || {};
+      const setVal = (id, key) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const v = ftp[key];
+        el.value = v == null ? '' : String(v);
+      };
+      setVal('ftpRide', 'ride');
+      setVal('ftpRun', 'run');
+      setVal('ftpRow', 'row');
+      setVal('ftpSwim', 'swim');
+      setVal('ftpStrength', 'strength');
+      setVal('ftpOther', 'other');
+    }
+
     function applyWidgetPrefs() {
       const pref = JSON.parse(localStorage.getItem('dashboardWidgets') || '{}');
       ['count', 'plannedCount', 'distance', 'time'].forEach(key => {
@@ -3673,10 +3928,17 @@ def page() -> str:
 
     async function loadData(resetMonthPosition) {
       try {
-        const [aResp, cResp, pResp] = await Promise.all([fetch('/ui/activities'), fetch('/calendar-items'), fetch('/pairs')]);
+        const [aResp, cResp, pResp, sResp] = await Promise.all([fetch('/ui/activities'), fetch('/calendar-items'), fetch('/pairs'), fetch('/settings')]);
         activities = aResp.ok ? await aResp.json() : [];
         calendarItems = cResp.ok ? await cResp.json() : [];
         pairs = pResp.ok ? await pResp.json() : [];
+        appSettings = sResp.ok ? await sResp.json() : { units: { distance: 'km', elevation: 'm' }, ftp: {} };
+        if (appSettings.units && appSettings.units.distance) {
+          distanceUnit = appSettings.units.distance;
+        }
+        if (appSettings.units && appSettings.units.elevation) {
+          elevationUnit = appSettings.units.elevation;
+        }
       } catch (_err) {
         activities = [];
         calendarItems = [];
@@ -3684,9 +3946,11 @@ def page() -> str:
       }
 
       if (resetMonthPosition) initialMonthCentered = false;
+      updateUnitButtons();
       renderHome();
       renderCalendar();
       renderDashboard();
+      renderSettings();
     }
 
     document.querySelectorAll('.tab').forEach(btn => {
@@ -3697,6 +3961,8 @@ def page() -> str:
     document.getElementById('distanceUnitBtn').addEventListener('click', () => {
       distanceUnit = distanceUnit === 'km' ? 'mi' : distanceUnit === 'mi' ? 'm' : 'km';
       localStorage.setItem('distanceUnit', distanceUnit);
+      appSettings.units = appSettings.units || {};
+      appSettings.units.distance = distanceUnit;
       updateUnitButtons();
       renderHome();
       renderCalendar();
@@ -3704,10 +3970,40 @@ def page() -> str:
     document.getElementById('elevationUnitBtn').addEventListener('click', () => {
       elevationUnit = elevationUnit === 'm' ? 'ft' : 'm';
       localStorage.setItem('elevationUnit', elevationUnit);
+      appSettings.units = appSettings.units || {};
+      appSettings.units.elevation = elevationUnit;
       updateUnitButtons();
       if (!document.getElementById('wvAnalyze').classList.contains('hidden') && window.currentWorkoutPayload) {
         renderWorkoutAnalyze(window.currentWorkoutPayload);
       }
+    });
+    document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
+      const read = (id) => {
+        const v = document.getElementById(id).value.trim();
+        return v ? Number(v) : null;
+      };
+      const payload = {
+        units: { distance: distanceUnit, elevation: elevationUnit },
+        ftp: {
+          ride: read('ftpRide'),
+          run: read('ftpRun'),
+          row: read('ftpRow'),
+          swim: read('ftpSwim'),
+          strength: read('ftpStrength'),
+          other: read('ftpOther'),
+        },
+      };
+      const resp = await fetch('/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) return;
+      appSettings = await resp.json();
+      const msg = document.getElementById('settingsSavedMsg');
+      msg.style.display = 'inline';
+      setTimeout(() => { msg.style.display = 'none'; }, 1400);
+      await loadData(false);
     });
     document.getElementById('uploadFitBtn').addEventListener('click', () => {
       document.getElementById('uploadFitInput').click();
@@ -3800,6 +4096,19 @@ def page() -> str:
 @app.get("/health")
 def health() -> dict[str, bool]:
     return {"ok": True}
+
+
+@app.get("/settings")
+def get_settings() -> dict[str, Any]:
+    settings = load_settings()
+    if not SETTINGS_FILE.exists():
+        save_settings(settings)
+    return settings
+
+
+@app.put("/settings")
+def put_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    return save_settings(payload)
 
 
 @app.get("/connect")
@@ -3941,8 +4250,9 @@ async def import_fit(request: Request, filename: str = Query(default="workout.fi
     imports_dir.mkdir(parents=True, exist_ok=True)
     saved_path = imports_dir / f"{file_id}.fit"
     saved_path.write_bytes(content)
+    settings = load_settings()
     try:
-        parsed = parse_fit_bytes_to_json(content)
+        parsed = parse_fit_bytes_to_json(content, settings=settings)
     except HTTPException:
         raise
     except Exception as err:
@@ -3956,6 +4266,8 @@ async def import_fit(request: Request, filename: str = Query(default="workout.fi
     distance_m = float(summary.get("distance_m") or 0)
     duration_s = float(summary.get("duration_s") or 0)
     sport = str(summary.get("sport") or "Ride").title()
+    if_value = summary.get("if")
+    tss_value = summary.get("tss")
     item = {
         "id": f"imported-{file_id}",
         "name": name.title(),
@@ -3966,6 +4278,10 @@ async def import_fit(request: Request, filename: str = Query(default="workout.fi
         "description": f"Imported from {safe_name}",
         "source": "fit",
         "fit_id": file_id,
+        "if_value": if_value,
+        "tss_override": tss_value,
+        "avg_power": summary.get("avg_power"),
+        "avg_hr": summary.get("avg_hr"),
     }
     imported = load_imported_activities()
     imported.append(item)
@@ -3996,6 +4312,10 @@ def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) 
             current["rpe"] = max(0, min(10, int(payload.get("rpe") or 0)))
         except (TypeError, ValueError):
             current["rpe"] = 0
+    if "if_value" in payload:
+        current["if_value"] = _as_float(payload.get("if_value"))
+    if "tss_override" in payload:
+        current["tss_override"] = _as_float(payload.get("tss_override"))
     overrides[activity_id] = current
     save_activity_overrides(overrides)
     return {"ok": True}
@@ -4053,6 +4373,7 @@ def update_calendar_item_completed(item_id: str, payload: dict[str, Any] = Body(
     item["completed_duration_min"] = n(payload.get("completed_duration_min"))
     item["completed_distance_km"] = n(payload.get("completed_distance_km"))
     item["completed_tss"] = n(payload.get("completed_tss"))
+    item["completed_if"] = n(payload.get("completed_if"))
     items[idx] = item
     save_calendar_items(items)
     return item
@@ -4148,9 +4469,12 @@ def get_planned_workouts() -> list[dict[str, Any]]:
             "planned_duration_min": i.get("duration_min", 0),
             "planned_distance_km": i.get("distance_km", 0),
             "planned_intensity": i.get("intensity", 6),
+            "planned_if": i.get("planned_if", 0),
+            "planned_tss": i.get("planned_tss", 0),
             "completed_duration_min": i.get("completed_duration_min", 0),
             "completed_distance_km": i.get("completed_distance_km", 0),
             "completed_tss": i.get("completed_tss", 0),
+            "completed_if": i.get("completed_if", 0),
             "comments": i.get("comments", ""),
             "feel": i.get("feel", 0),
             "rpe": i.get("rpe", 0),
@@ -4171,9 +4495,12 @@ def create_planned_workout(payload: dict[str, Any] = Body(...)) -> dict[str, Any
         "duration_min": payload.get("planned_duration_min", 0),
         "distance_km": payload.get("planned_distance_km", 0),
         "intensity": payload.get("planned_intensity", 6),
+        "planned_if": payload.get("planned_if", 0),
+        "planned_tss": payload.get("planned_tss", 0),
         "completed_duration_min": payload.get("completed_duration_min", 0),
         "completed_distance_km": payload.get("completed_distance_km", 0),
         "completed_tss": payload.get("completed_tss", 0),
+        "completed_if": payload.get("completed_if", 0),
         "comments": payload.get("comments", ""),
         "feel": payload.get("feel", 0),
         "rpe": payload.get("rpe", 0),

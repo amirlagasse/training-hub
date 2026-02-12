@@ -13,7 +13,11 @@
     "avg_cadence": null,
     "max_cadence": null,
     "elev_gain_m": null,
-    "sport": "Cycling"
+    "sport": "Cycling",
+    "sport_key": "other",
+    "ftp": null,
+    "if": null,
+    "tss": null
   },
   "series": [
     {

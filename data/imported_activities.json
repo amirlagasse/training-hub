@@ -10,7 +10,7 @@
     "source": "fit"
   },
   {
-    "id": "imported-8e89eb6b-9612-42a1-b93a-ed987b0e7802",
+    "id": "imported-c41678fc-194a-4c4a-b45c-514cdb83613a",
     "name": "Tp 4211127.2026 02 11 16 27 52 954Z.Garminping.Aaaaagmmrggx9Xgk",
     "type": "Cycling",
     "distance": 0.0,
@@ -18,6 +18,10 @@
     "start_date_local": "2026-02-11T14:49:00",
     "description": "Imported from tp-4211127.2026-02-11-16-27-52-954Z.GarminPing.AAAAAGmMrggx9xgk.FIT",
     "source": "fit",
-    "fit_id": "8e89eb6b-9612-42a1-b93a-ed987b0e7802"
+    "fit_id": "c41678fc-194a-4c4a-b45c-514cdb83613a",
+    "if_value": null,
+    "tss_override": null,
+    "avg_power": null,
+    "avg_hr": 141.0
   }
 ]
