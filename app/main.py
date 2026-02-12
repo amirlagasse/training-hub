@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import requests
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 load_dotenv()
@@ -3127,11 +3127,10 @@ def page() -> str:
       const input = event.target;
       const file = input.files && input.files[0];
       if (!file) return;
-      const formData = new FormData();
-      formData.append('file', file);
-      const resp = await fetch('/import-fit', {
+      const resp = await fetch(`/import-fit?filename=${encodeURIComponent(file.name)}`, {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: file,
       });
       input.value = '';
       if (!resp.ok) {
@@ -3304,13 +3303,12 @@ def delete_activity_local(activity_id: str) -> dict[str, bool]:
 
 
 @app.post("/import-fit")
-async def import_fit(file: UploadFile = File(...)) -> dict[str, Any]:
-    filename = file.filename or "workout.fit"
+async def import_fit(request: Request, filename: str = Query(default="workout.fit")) -> dict[str, Any]:
     ext = Path(filename).suffix.lower()
     if ext != ".fit":
         raise HTTPException(status_code=400, detail="Only .fit files are supported.")
 
-    content = await file.read()
+    content = await request.body()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file.")
 
@@ -3320,7 +3318,8 @@ async def import_fit(file: UploadFile = File(...)) -> dict[str, Any]:
     saved_path = imports_dir / f"{file_id}.fit"
     saved_path.write_bytes(content)
 
-    name = Path(filename).stem.replace("_", " ").replace("-", " ").strip() or "Imported Workout"
+    safe_name = Path(filename).name
+    name = Path(safe_name).stem.replace("_", " ").replace("-", " ").strip() or "Imported Workout"
     item = {
         "id": f"imported-{file_id}",
         "name": name.title(),
@@ -3328,7 +3327,7 @@ async def import_fit(file: UploadFile = File(...)) -> dict[str, Any]:
         "distance": 0,
         "moving_time": 0,
         "start_date_local": f"{date.today().isoformat()}T08:00:00",
-        "description": f"Imported from {filename}",
+        "description": f"Imported from {safe_name}",
         "source": "fit",
     }
     imported = load_imported_activities()
