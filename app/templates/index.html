@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Training Freaks</title>
+    <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <header class="top-nav">
+    <div class="brand">
+      <img id="brandIcon" class="brand-icon" src="/icons/logos/logo.png" alt="Training Freaks logo" />
+      <img id="brandText" class="brand-text" src="/icons/logos/logotext.png" alt="Training Freaks" />
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-view="home">Home</button>
+      <button class="tab" data-view="calendar">Calendar</button>
+      <button class="tab" data-view="dashboard">Dashboard</button>
+    </nav>
+    <div class="nav-right">
+      <input id="uploadFitInput" type="file" accept=".fit" style="display:none;" />
+      <span>Amir LaGasse</span>
+      <button class="nav-settings" id="globalSettings" title="Settings">&#9881;</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="page-head">
+      <h1 id="pageTitle">Home</h1>
+    </div>
+
+    <section id="view-home" class="view active">
+      <div class="home-grid">
+        <aside class="stack">
+          <div class="panel">
+            <h3 class="panel-title">
+              <span>Events</span>
+              <button class="plus-btn" id="addEventBtn">+</button>
+            </h3>
+            <div id="eventsList"></div>
+          </div>
+
+          <div class="panel">
+            <h3 class="panel-title">
+              <span>Goals</span>
+              <button class="goal-btn" id="addGoalBtn">Add Goal</button>
+            </h3>
+            <div id="goalsList"></div>
+          </div>
+        </aside>
+
+        <section class="stack">
+          <div class="panel">
+            <h3 class="panel-title"><span>Today - Completed Workouts</span></h3>
+            <div id="todayDone"></div>
+          </div>
+          <div class="panel">
+            <h3 class="panel-title"><span>Planned Workouts</span></h3>
+            <div id="todayPlanned"></div>
+          </div>
+        </section>
+
+        <aside class="panel">
+          <h3 class="panel-title"><span>Performance Metrics</span></h3>
+          <div class="metric-row">
+            <div class="metric-chip chip-ctl">
+              <span class="num" id="ctlVal">0</span>
+              <span class="lbl">Fitness (CTL)</span>
+            </div>
+            <div class="metric-chip chip-atl">
+              <span class="num" id="atlVal">0</span>
+              <span class="lbl">Fatigue (ATL)</span>
+            </div>
+            <div class="metric-chip chip-tsb">
+              <span class="num" id="tsbVal">0</span>
+              <span class="lbl">Form (TSB)</span>
+            </div>
+          </div>
+
+          <div class="explain">
+            Training Stress Score (TSS) is estimated from duration and intensity (placeholder formula).<br/><br/>
+            Fitness (CTL) is a 42-day rolling average of daily TSS.<br/>
+            Fatigue (ATL) is a 7-day rolling average of daily TSS.<br/>
+            Form (TSB) is yesterday's CTL minus yesterday's ATL.
+          </div>
+
+          <div class="spark-wrap">
+            <div class="spark-box">
+              <div class="spark-head"><span>Fitness Trend</span><strong id="ctlTrend">0</strong></div>
+              <div class="sparkline" id="ctlSpark"></div>
+            </div>
+            <div class="spark-box">
+              <div class="spark-head"><span>Fatigue Trend</span><strong id="atlTrend">0</strong></div>
+              <div class="sparkline" id="atlSpark"></div>
+            </div>
+            <div class="spark-box">
+              <div class="spark-head"><span>Form Trend</span><strong id="tsbTrend">0</strong></div>
+              <div class="sparkline" id="tsbSpark"></div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="view-calendar" class="view">
+      <div class="calendar-wrap">
+        <div class="calendar-head">
+          <div class="cal-nav">
+            <h3 id="calHeaderMonth" style="margin:0;font-size:18px;color:#31455f;">February 2026</h3>
+            <button class="btn secondary" id="calTodayBtn" type="button" style="padding:5px 10px;font-size:12px;">Today</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="import-btn" id="uploadFitBtn" title="Import FIT" aria-label="Import FIT">&#8682;</button>
+          </div>
+        </div>
+        <div class="calendar-week-header" id="calendarWeekHeader">
+          <span>MON</span>
+          <span>TUE</span>
+          <span>WED</span>
+          <span>THU</span>
+          <span>FRI</span>
+          <span>SAT</span>
+          <span>SUN</span>
+          <span class="sum-head">WEEK SUMMARY</span>
+        </div>
+        <div id="calendarScroll" class="calendar-scroll"></div>
+      </div>
+    </section>
+
+    <section id="view-dashboard" class="view">
+      <div class="grid" id="dashboardGrid">
+        <div class="panel" data-widget="count" style="grid-column: span 3;">
+          <h3 class="panel-title"><span>Completed Activities</span></h3>
+          <p class="stat" id="statCount">0</p>
+          <p class="sub">Strava imports loaded</p>
+        </div>
+
+        <div class="panel" data-widget="plannedCount" style="grid-column: span 3;">
+          <h3 class="panel-title"><span>Planned Workouts</span></h3>
+          <p class="stat" id="statPlanned">0</p>
+          <p class="sub">Custom planned sessions</p>
+        </div>
+
+        <div class="panel" data-widget="distance" style="grid-column: span 3;">
+          <h3 class="panel-title"><span>Total Distance</span></h3>
+          <p class="stat" id="statDistance">0 km</p>
+          <p class="sub">Across imported activities</p>
+        </div>
+
+        <div class="panel" data-widget="time" style="grid-column: span 3;">
+          <h3 class="panel-title"><span>Total Moving Time</span></h3>
+          <p class="stat" id="statTime">0 h</p>
+          <p class="sub">Across imported activities</p>
+        </div>
+
+        <div class="panel" style="grid-column: span 12;">
+          <h3 class="panel-title"><span>Customize Dashboard</span></h3>
+          <label class="toggle"><span>Show completed activity count</span><input type="checkbox" data-toggle="count" checked /></label>
+          <label class="toggle"><span>Show planned workout count</span><input type="checkbox" data-toggle="plannedCount" checked /></label>
+          <label class="toggle"><span>Show distance</span><input type="checkbox" data-toggle="distance" checked /></label>
+          <label class="toggle"><span>Show moving time</span><input type="checkbox" data-toggle="time" checked /></label>
+        </div>
+      </div>
+    </section>
+
+  </main>
+  <div id="settingsModal" class="modal">
+    <div class="settings-card">
+      <div class="modal-top" style="margin-bottom:6px;">
+        <h3 style="margin:0;">Settings</h3>
+        <button class="icon-btn" id="closeSettings">&times;</button>
+      </div>
+      <div class="panel" style="box-shadow:none;">
+        <h3 class="panel-title"><span>FTP Settings</span></h3>
+        <div class="grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+          <div class="field"><label>Bike FTP (W)</label><input id="ftpRide" type="number" min="50" max="600" placeholder="--" /></div>
+          <div class="field"><label>Run FTP (optional)</label><input id="ftpRun" type="number" min="50" max="600" placeholder="--" /></div>
+          <div class="field"><label>Row FTP (W)</label><input id="ftpRow" type="number" min="50" max="600" placeholder="--" /></div>
+          <div class="field"><label>Swim FTP (optional)</label><input id="ftpSwim" type="number" min="50" max="600" placeholder="--" /></div>
+          <div class="field"><label>Strength FTP (optional)</label><input id="ftpStrength" type="number" min="50" max="600" placeholder="--" /></div>
+          <div class="field"><label>Other FTP</label><input id="ftpOther" type="number" min="50" max="600" placeholder="--" /></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+          <button class="btn primary" id="saveSettingsBtn">Save</button>
+          <span id="settingsSavedMsg" class="meta" style="display:none;color:#17733e;">Saved</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="actionModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-top">
+        <h2 class="m-title" id="actionDateTitle">Wednesday, February 11, 2026</h2>
+        <button class="icon-btn" id="closeAction">&times;</button>
+      </div>
+
+      <h3 class="section-label">Add a Workout</h3>
+      <div class="type-grid" id="workoutTypeGrid"></div>
+
+      <h3 class="section-label">Add Other</h3>
+      <div class="type-grid" id="otherTypeGrid"></div>
+    </div>
+  </div>
+
+  <div id="contextMenu" class="ctx-menu"></div>
+
+  <div id="detailModal" class="modal">
+    <div class="modal-card" style="padding: 0;">
+      <div class="detail-shell">
+        <div class="detail-top">
+          <div class="detail-date" id="detailDateLabel">WEDNESDAY FEBRUARY 11, 2026</div>
+          <div id="detailMetricsChips" style="display:contents;">
+            <div class="mini-chip ctl" id="miniCtl">Fitness 0</div>
+            <div class="mini-chip atl" id="miniAtl">Fatigue 0</div>
+            <div class="mini-chip tsb" id="miniTsb">Form 0</div>
+          </div>
+        </div>
+
+        <div class="detail-body">
+          <div class="detail-left">
+            <div class="field">
+              <label id="detailTitleLabel">Title</label>
+              <input id="dTitle" placeholder="Untitled" />
+            </div>
+
+            <div class="field">
+              <label>Date</label>
+              <input id="dDate" type="date" />
+            </div>
+
+            <div id="workoutFields" class="hidden">
+              <div class="tp-workout-layout">
+                <div>
+                  <div class="tp-table-head">
+                    <div></div><div>Planned</div><div>Completed</div><div></div>
+                  </div>
+                  <div class="tp-row">
+                    <label>Duration</label>
+                    <input id="dDuration" class="tp-in" type="number" min="0" />
+                    <input class="tp-in readonly" readonly />
+                    <div class="tp-unit">h:m:s</div>
+                  </div>
+                  <div class="tp-row">
+                    <label>Distance</label>
+                    <input id="dDistance" class="tp-in" type="number" min="0" step="0.1" />
+                    <input class="tp-in readonly" readonly />
+                    <div class="tp-unit distance-unit-label">km</div>
+                  </div>
+                  <div class="tp-row">
+                    <label>TSS</label>
+                    <input class="tp-in readonly" readonly />
+                    <input class="tp-in readonly" readonly />
+                    <div class="tp-unit">TSS</div>
+                  </div>
+                  <div class="tp-row">
+                    <label>IF</label>
+                    <input class="tp-in readonly" readonly />
+                    <input class="tp-in readonly" readonly />
+                    <div class="tp-unit">IF</div>
+                  </div>
+                  <div class="tp-minmax-head">
+                    <div></div><div>Min</div><div>Avg</div><div>Max</div><div></div>
+                  </div>
+                  <div class="tp-minmax-row">
+                    <label>Heart Rate</label>
+                    <input class="tp-in readonly" readonly />
+                    <input class="tp-in readonly" readonly />
+                    <input class="tp-in readonly" readonly />
+                    <div class="tp-unit">bpm</div>
+                  </div>
+                  <div class="tp-minmax-row">
+                    <label>Power</label>
+                    <input class="tp-in readonly" readonly />
+                    <input class="tp-in readonly" readonly />
+                    <input class="tp-in readonly" readonly />
+                    <div class="tp-unit">W</div>
+                  </div>
+                  <div class="tp-equipment-title">Equipment</div>
+                  <div class="tp-eq-row">
+                    <label>Bike</label>
+                    <select class="tp-select"><option>Select Bike</option></select>
+                  </div>
+                  <div class="tp-eq-row">
+                    <label>Shoes</label>
+                    <select class="tp-select"><option>Select Shoe</option></select>
+                  </div>
+                </div>
+                <div class="tp-right-block">
+                  <div class="field">
+                    <label>Description</label>
+                    <textarea id="dDescription" style="min-height:72px;" placeholder="Add details"></textarea>
+                  </div>
+                  <div class="field">
+                    <label>Post-activity Comments</label>
+                    <input placeholder="Enter a new comment" />
+                  </div>
+                  <div class="field" style="margin-top:10px;">
+                    <label>Workout Type</label>
+                    <input id="dWorkoutType" />
+                  </div>
+                  <div class="field">
+                    <label>Intensity (1-10)</label>
+                    <input id="dIntensity" type="number" min="1" max="10" step="1" value="6" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div id="eventFields" class="hidden">
+              <div class="field">
+                <label>Event Type</label>
+                <select id="dEventType">
+                  <option>Race</option>
+                  <option>Test</option>
+                  <option>Camp</option>
+                  <option>A Race</option>
+                  <option>B Race</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="availabilityFields" class="hidden">
+              <div class="field">
+                <label>Availability</label>
+                <select id="dAvailability">
+                  <option>Unavailable</option>
+                  <option>Limited Availability</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="nonWorkoutDescription" class="field">
+              <label>Description</label>
+              <textarea id="dDescriptionOther" placeholder="Add details"></textarea>
+            </div>
+          </div>
+
+          <div class="detail-right">
+            <h3 style="margin: 0 0 10px; color: #607690; font-size: 12px; letter-spacing: .35px; text-transform: uppercase;">Comments</h3>
+            <div class="comment-card">Comments are available once the item has been saved.</div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn ghost" id="deleteDetail">Delete</button>
+          <button class="btn ghost" id="cancelDetail">Cancel</button>
+          <button class="btn secondary" id="saveDetail">Save</button>
+          <button class="btn primary" id="saveCloseDetail">Save &amp; Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="workoutViewModal" class="modal workout-view-modal">
+    <div class="modal-card" style="padding: 0; width: min(900px, 100%);">
+      <div class="wv-shell">
+        <div class="wv-top">
+          <div class="wv-head-main">
+            <div class="wv-row1">
+              <div id="wvDateLine" class="wv-date-line">WEDNESDAY, FEBRUARY 11, 2026</div>
+              <select id="wvTimeSelect" class="wv-time-select"><option>8:07 am</option></select>
+              <div class="mini-chip ctl" id="wvHeadCtl">Fitness 0</div>
+              <div class="mini-chip atl" id="wvHeadAtl">Fatigue 0</div>
+              <div class="mini-chip tsb" id="wvHeadTsb">Form 0</div>
+            </div>
+            <div class="wv-row2">
+              <div class="wv-sport-wrap">
+                <span id="wvSportIcon" class="type-icon"></span>
+                <button type="button" id="wvSportToggle" class="wv-sport-toggle">▼</button>
+                <div id="wvSportName" class="wv-sport-name">Workout</div>
+                <div id="wvSportMenu" class="wv-sport-menu hidden"></div>
+              </div>
+              <div class="wv-title-stack">
+                <input id="wvTitle" class="wv-title-input" value="Workout" />
+                <div class="wv-meta-line">
+                  <strong id="wvHeaderDuration">--:--:--</strong>
+                  <strong id="wvHeaderDistance">-- km</strong>
+                  <strong id="wvHeaderTss">-- TSS</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="wv-tabs">
+            <button class="wv-tab files" id="wvFilesTabBtn">Files</button>
+            <button class="wv-tab analyze" id="wvAnalyzeBtn">Analyze</button>
+            <button class="icon-btn" id="closeWorkoutView">&times;</button>
+          </div>
+          <div id="wvFilesPopover" class="wv-files-popover hidden">
+            <div class="wv-card" style="padding:10px;">
+              <h3 style="margin:0 0 8px;">Upload Device File</h3>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <button class="btn secondary" id="wvBrowseFilesBtn">Browse Files</button>
+              </div>
+              <div id="wvFileList" style="margin-top:10px;"></div>
+            </div>
+          </div>
+        </div>
+        <div class="wv-body">
+          <section id="wvSummary">
+            <div class="wv-grid-vertical">
+              <div class="wv-card">
+                <h3 style="margin: 0 0 6px;">Workout Summary</h3>
+                <p class="meta" id="wvSummaryText">-</p>
+                <div class="tp-workout-layout">
+                  <div>
+                    <div class="tp-table-head">
+                      <div></div><div>Planned</div><div>Completed</div><div></div>
+                    </div>
+                    <div class="tp-row">
+                      <label>Duration</label>
+                      <input id="pcDurPlan" class="tp-in" />
+                      <input id="pcDurComp" class="tp-in" />
+                      <div class="tp-unit">h:m:s</div>
+                    </div>
+                    <div class="tp-row">
+                      <label>Distance</label>
+                      <input id="pcDistPlan" class="tp-in" />
+                      <input id="pcDistComp" class="tp-in" />
+                      <div class="tp-unit">
+                        <select id="pcDistanceUnit" class="tp-unit-select">
+                          <option value="km">km</option>
+                          <option value="mi">mi</option>
+                          <option value="m">m</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="tp-row">
+                      <label>Elevation</label>
+                      <input id="pcElevPlan" class="tp-in" />
+                      <input id="pcElevComp" class="tp-in" />
+                      <div class="tp-unit">
+                        <select id="pcElevationUnit" class="tp-unit-select">
+                          <option value="m">m</option>
+                          <option value="ft">ft</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="tp-row">
+                      <label>TSS</label>
+                      <input id="pcTssPlan" class="tp-in" />
+                      <input id="pcTssComp" class="tp-in" />
+                      <div class="tp-unit">TSS</div>
+                    </div>
+                    <div class="tp-row">
+                      <label>IF</label>
+                      <input id="pcIfPlan" class="tp-in" />
+                      <input id="pcIfComp" class="tp-in" />
+                      <div class="tp-unit">IF</div>
+                    </div>
+                    <div class="tp-minmax-head">
+                      <div></div><div>Min</div><div>Avg</div><div>Max</div><div></div>
+                    </div>
+                    <div class="tp-minmax-row">
+                      <label>Heart Rate</label>
+                      <input id="wvHrMin" class="tp-in" />
+                      <input id="wvHrAvg" class="tp-in" />
+                      <input id="wvHrMax" class="tp-in" />
+                      <div class="tp-unit">bpm</div>
+                    </div>
+                    <div class="tp-minmax-row">
+                      <label>Power</label>
+                      <input id="wvPowerMin" class="tp-in" />
+                      <input id="wvPowerAvg" class="tp-in" />
+                      <input id="wvPowerMax" class="tp-in" />
+                      <div class="tp-unit">W</div>
+                    </div>
+                    <div class="tp-equipment-title">Equipment</div>
+                    <div class="tp-eq-row">
+                      <label>Bike</label>
+                      <select class="tp-select"><option>Select Bike</option></select>
+                    </div>
+                    <div class="tp-eq-row">
+                      <label>Shoes</label>
+                      <select class="tp-select"><option>Select Shoe</option></select>
+                    </div>
+                  </div>
+                  <div class="tp-right-block">
+                    <div class="field">
+                      <label>Description</label>
+                      <textarea id="wvDescription" style="min-height:72px;"></textarea>
+                    </div>
+                    <div class="field">
+                      <label>How did you feel?</label>
+                      <div class="feel-row" id="feelRow">
+                        <button class="feel-btn" type="button" data-feel="1" title="Very Weak">😫</button>
+                        <button class="feel-btn" type="button" data-feel="2" title="Weak">🙁</button>
+                        <button class="feel-btn" type="button" data-feel="3" title="Normal">😐</button>
+                        <button class="feel-btn" type="button" data-feel="4" title="Strong">🙂</button>
+                        <button class="feel-btn" type="button" data-feel="5" title="Very Strong">😁</button>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label>Rating of Perceived Exertion (RPE): <span id="wvRpeVal"></span></label>
+                      <input id="wvRpe" class="rpe-slider rpe-unset" type="range" min="1" max="10" step="1" value="1" />
+                    </div>
+                    <div class="field">
+                      <label>Post-activity comments</label>
+                      <div id="wvCommentsFeed" class="comment-feed"></div>
+                      <div class="comment-input-row">
+                        <input id="wvCommentInput" placeholder="Enter a new comment" />
+                        <button class="btn secondary" id="wvPostCommentBtn" type="button">Post</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section id="wvAnalyze" class="hidden">
+            <div class="wv-grid">
+              <div>
+                <div class="chart-box">
+                  <div class="legend">
+                    <span class="l-hr">Heart Rate</span>
+                    <span class="l-pwr">Watts</span>
+                    <span class="l-cad">Cadence</span>
+                    <span class="l-spd">Speed</span>
+                  </div>
+                  <svg id="wvChart" viewBox="0 0 1200 360" width="100%" height="320" role="img" aria-label="Workout analysis chart"></svg>
+                  <svg id="wvViewfinder" viewBox="0 0 1200 90" width="100%" height="80" role="img" aria-label="Workout viewfinder"></svg>
+                </div>
+                <table class="lap-table" id="wvLapTable">
+                  <thead>
+                    <tr>
+                      <th></th>
+                      <th>Segment</th>
+                      <th>Duration</th>
+                      <th>Distance</th>
+                      <th>Avg HR</th>
+                      <th>Avg W</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="wv-card">
+                <h3 style="margin: 0;">Selection</h3>
+                <div class="wv-kv" id="wvSelectionKv"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn ghost" id="deleteWorkoutView">Delete</button>
+        <button class="btn ghost" id="cancelWorkoutView">Cancel</button>
+        <button class="btn secondary" id="saveWorkoutView">Save</button>
+        <button class="btn primary" id="saveCloseWorkoutView">Save &amp; Close</button>
+      </div>
+    </div>
+  </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
