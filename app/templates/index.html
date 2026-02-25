@@ -3,8 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260225d" />
 </head>
 <body>
   <header class="top-nav">
@@ -170,11 +173,18 @@
         <h3 style="margin:0;">Settings</h3>
         <button class="icon-btn" id="closeSettings">&times;</button>
       </div>
-      <div class="panel" style="box-shadow:none;">
-        <h3 class="panel-title"><span>FTP Settings</span></h3>
-        <div class="grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
-          <div class="field"><label>Bike FTP (W)</label><input id="ftpRide" type="number" min="50" max="600" placeholder="--" /></div>
-          <div class="field"><label>Run FTP (optional)</label><input id="ftpRun" type="number" min="50" max="600" placeholder="--" /></div>
+        <div class="panel" style="box-shadow:none;">
+          <h3 class="panel-title"><span>FTP Settings</span></h3>
+          <div class="field" style="margin-bottom:10px;">
+            <label>Unit System</label>
+            <div class="seg-toggle" id="unitSystemToggle">
+              <button type="button" class="seg-btn active" data-system="metric">Metric</button>
+              <button type="button" class="seg-btn" data-system="imperial">Imperial</button>
+            </div>
+          </div>
+          <div class="grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+            <div class="field"><label>Bike FTP (W)</label><input id="ftpRide" type="number" min="50" max="600" placeholder="--" /></div>
+            <div class="field"><label>Run FTP (optional)</label><input id="ftpRun" type="number" min="50" max="600" placeholder="--" /></div>
           <div class="field"><label>Row FTP (W)</label><input id="ftpRow" type="number" min="50" max="600" placeholder="--" /></div>
           <div class="field"><label>Swim FTP (optional)</label><input id="ftpSwim" type="number" min="50" max="600" placeholder="--" /></div>
           <div class="field"><label>Strength FTP (optional)</label><input id="ftpStrength" type="number" min="50" max="600" placeholder="--" /></div>
@@ -371,7 +381,7 @@
                 <div id="wvSportName" class="wv-sport-name">Workout</div>
                 <div id="wvSportMenu" class="wv-sport-menu hidden"></div>
               </div>
-              <div class="wv-title-stack">
+                <div class="wv-title-stack">
                 <input id="wvTitle" class="wv-title-input" value="Workout" />
                 <div class="wv-meta-line">
                   <strong id="wvHeaderDuration">--:--:--</strong>
@@ -382,9 +392,14 @@
             </div>
           </div>
           <div class="wv-tabs">
+            <button class="icon-btn" id="closeWorkoutView">&times;</button>
             <button class="wv-tab files" id="wvFilesTabBtn">Files</button>
             <button class="wv-tab analyze" id="wvAnalyzeBtn">Analyze</button>
-            <button class="icon-btn" id="closeWorkoutView">&times;</button>
+            <div class="wv-head-status">
+              <span id="wvTopFeelRpe" class="wv-top-feel-rpe hidden"></span>
+              <span id="wvHeadStatusSep" class="wv-head-status-sep hidden">|</span>
+              <span id="wvTopComments" class="wv-top-comments">💬</span>
+            </div>
           </div>
           <div id="wvFilesPopover" class="wv-files-popover hidden">
             <div class="wv-card" style="padding:10px;">
@@ -400,7 +415,6 @@
           <section id="wvSummary">
             <div class="wv-grid-vertical">
               <div class="wv-card">
-                <h3 style="margin: 0 0 6px;">Workout Summary</h3>
                 <p class="meta" id="wvSummaryText">-</p>
                 <div class="tp-workout-layout">
                   <div>
@@ -426,6 +440,18 @@
                       </div>
                     </div>
                     <div class="tp-row">
+                      <label>Average Speed</label>
+                      <input id="pcAvgSpeedPlan" class="tp-in" />
+                      <input id="pcAvgSpeedComp" class="tp-in" />
+                      <div class="tp-unit">speed</div>
+                    </div>
+                    <div class="tp-row">
+                      <label>Calories</label>
+                      <input id="pcCaloriesPlan" class="tp-in" />
+                      <input id="pcCaloriesComp" class="tp-in" />
+                      <div class="tp-unit">kcal</div>
+                    </div>
+                    <div class="tp-row">
                       <label>Elevation</label>
                       <input id="pcElevPlan" class="tp-in" />
                       <input id="pcElevComp" class="tp-in" />
@@ -447,6 +473,18 @@
                       <input id="pcIfPlan" class="tp-in" />
                       <input id="pcIfComp" class="tp-in" />
                       <div class="tp-unit">IF</div>
+                    </div>
+                    <div class="tp-row">
+                      <label>Normalized Power</label>
+                      <input id="pcNpPlan" class="tp-in" />
+                      <input id="pcNpComp" class="tp-in" />
+                      <div class="tp-unit">W</div>
+                    </div>
+                    <div class="tp-row">
+                      <label>Work</label>
+                      <input id="pcWorkPlan" class="tp-in" />
+                      <input id="pcWorkComp" class="tp-in" />
+                      <div class="tp-unit">kJ</div>
                     </div>
                     <div class="tp-minmax-head">
                       <div></div><div>Min</div><div>Avg</div><div>Max</div><div></div>
@@ -510,32 +548,50 @@
           <section id="wvAnalyze" class="hidden">
             <div class="wv-grid">
               <div>
-                <div class="chart-box">
-                  <div class="legend">
-                    <span class="l-hr">Heart Rate</span>
-                    <span class="l-pwr">Watts</span>
-                    <span class="l-cad">Cadence</span>
-                    <span class="l-spd">Speed</span>
+                <div class="chart-box" style="position:relative;">
+                  <div class="analyze-toolbar">
+                    <div class="analyze-toolbar-left">
+                      <button id="wvZoomBtn" class="btn secondary analyze-mini-btn" type="button" disabled>Zoom</button>
+                      <button id="wvCutBtn" class="btn secondary analyze-mini-btn" type="button" disabled>Cut</button>
+                      <button id="wvUnzoomBtn" class="btn ghost hidden" type="button">Unzoom</button>
+                      <div class="analyze-smoothing-wrap">
+                        <input id="wvSmoothingStep" class="analyze-smoothing-input" type="range" min="1" max="12" step="1" value="2" />
+                        <span class="analyze-smoothing-tooltip">Smoothing</span>
+                      </div>
+                    </div>
+                    <div id="wvAnalyzeChannelsTop" class="analyze-channels analyze-channels-top"></div>
                   </div>
-                  <svg id="wvChart" viewBox="0 0 1200 360" width="100%" height="320" role="img" aria-label="Workout analysis chart"></svg>
-                  <svg id="wvViewfinder" viewBox="0 0 1200 90" width="100%" height="80" role="img" aria-label="Workout viewfinder"></svg>
+                  <div id="wvCursorTooltip" class="analyze-tooltip hidden"></div>
+                  <svg id="wvChart" viewBox="0 0 1200 220" width="100%" height="220" role="img" aria-label="Workout analysis chart" style="cursor:crosshair;display:block;"></svg>
                 </div>
                 <table class="lap-table" id="wvLapTable">
                   <thead>
                     <tr>
-                      <th></th>
-                      <th>Segment</th>
+                      <th>Lap</th>
+                      <th>Start</th>
+                      <th>End</th>
                       <th>Duration</th>
+                      <th>Moving</th>
                       <th>Distance</th>
-                      <th>Avg HR</th>
+                      <th>TSS</th>
+                      <th>IF</th>
+                      <th>NP</th>
                       <th>Avg W</th>
+                      <th>Max W</th>
+                      <th>Avg HR</th>
+                      <th>Max HR</th>
+                      <th>Avg Speed</th>
+                      <th>Max Speed</th>
+                      <th>Cadence</th>
+                      <th>Work</th>
+                      <th>Calories</th>
                     </tr>
                   </thead>
                   <tbody></tbody>
                 </table>
               </div>
-              <div class="wv-card">
-                <h3 style="margin: 0;">Selection</h3>
+              <div class="wv-card wv-selection-card">
+                <h3 id="wvSelectionTitle" style="margin:0 0 4px;">Entire Workout</h3>
                 <div class="wv-kv" id="wvSelectionKv"></div>
               </div>
             </div>
@@ -551,6 +607,18 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js"></script>
+  <!-- Custom delete confirmation modal -->
+  <div id="deleteConfirmModal" class="modal" style="z-index:110;">
+    <div class="delete-confirm-card">
+      <h3 class="delete-confirm-title">Are you sure you want to delete this?</h3>
+      <p id="deleteConfirmSub" class="delete-confirm-sub">This cannot be undone.</p>
+      <div class="delete-confirm-btns">
+        <button class="delete-cancel-btn" id="deleteConfirmCancel">Cancel</button>
+        <button class="delete-action-btn" id="deleteConfirmOk">Delete</button>
+      </div>
+    </div>
+  </div>
+
+    <script src="/static/js/app.js?v=20260225d"></script>
 </body>
 </html>

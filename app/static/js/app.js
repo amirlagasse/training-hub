@@ -1,3 +1,18 @@
+    // ── Custom delete confirm modal ──
+    let _deleteConfirmResolver = null;
+    function confirmDelete({ message = 'This cannot be undone.', onConfirm } = {}) {
+      const modal = document.getElementById('deleteConfirmModal');
+      const subtitle = document.getElementById('deleteConfirmSub');
+      if (subtitle) subtitle.textContent = message;
+      modal.classList.add('open');
+      return new Promise((resolve) => {
+        _deleteConfirmResolver = async (ok) => {
+          resolve(Boolean(ok));
+          if (ok && typeof onConfirm === 'function') await onConfirm();
+        };
+      });
+    }
+
     const WORKOUT_TYPES = [
       ['Run', 'run'], ['Bike', 'bike'], ['Swim', 'swim'], ['Brick', 'brick'],
       ['Crosstrain', 'pulse'], ['Day Off', 'rest'], ['Mtn Bike', 'mtb'], ['Strength', 'strength'],
@@ -44,7 +59,6 @@
     let selectedWorkoutType = 'Run';
     let editingItemId = null;
     let analyzeState = null;
-    let initialMonthCentered = false;
     let appSettings = { units: { distance: 'km', elevation: 'm' }, ftp: {} };
     let distanceUnit = localStorage.getItem('distanceUnit') || 'km';
     let elevationUnit = localStorage.getItem('elevationUnit') || 'm';
@@ -52,10 +66,13 @@
     let fitUploadTargetActivityId = null;
     let fitUploadContext = 'global';
     let modalDraft = null;
-    let calendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-    let calendarScrollBound = false;
-    let calendarAnchorWeekStart = dateKeyFromDate(mondayOfDate(new Date()));
-    let calendarScrollTop = 0;
+    const calendarState = {
+      anchorDate: todayKey(),
+      scrollTop: 0,
+      hasRendered: false,
+      scrollDebounce: null,
+      activeScrollSync: false,
+    };
 
     function localDateKey(d) {
       const dt = new Date(d);
@@ -84,8 +101,12 @@
       return d;
     }
 
+    function getCalendarScrollContainer() {
+      return document.getElementById('calendarScroll');
+    }
+
     function syncCalendarHeaderFromScroll() {
-      const wrap = document.getElementById('calendarScroll');
+      const wrap = getCalendarScrollContainer();
       if (!wrap) return;
       const rows = Array.from(wrap.querySelectorAll('.week-row'));
       if (!rows.length) return;
@@ -100,10 +121,23 @@
       const row = closestAbove || closest || rows[0];
       if (!row) return;
       document.getElementById('calHeaderMonth').textContent = row.dataset.weekLabel || '';
-      const [yy, mm] = String(row.dataset.weekMonth || '').split('-');
-      if (yy && mm) calendarCursor = new Date(Number(yy), Number(mm) - 1, 1);
-      calendarAnchorWeekStart = String(row.dataset.weekStart || '');
-      calendarScrollTop = wrap.scrollTop;
+      const topDay = row.querySelector('.day[data-date]');
+      if (topDay && topDay.dataset.date) {
+        calendarState.anchorDate = String(topDay.dataset.date);
+      }
+      calendarState.scrollTop = wrap.scrollTop;
+    }
+
+    function bindCalendarScrollSync() {
+      const wrap = getCalendarScrollContainer();
+      if (!wrap || calendarState.activeScrollSync) return;
+      wrap.addEventListener('scroll', () => {
+        if (calendarState.scrollDebounce) clearTimeout(calendarState.scrollDebounce);
+        calendarState.scrollDebounce = setTimeout(() => {
+          syncCalendarHeaderFromScroll();
+        }, 50);
+      });
+      calendarState.activeScrollSync = true;
     }
 
     function toDisplayDistanceFromMeters(meters, unit = distanceUnit) {
@@ -175,6 +209,11 @@
       return `${Math.round(e.value)} ${e.unit}`;
     }
 
+    function isFutureDateKey(key) {
+      if (!key) return false;
+      return key > todayKey();
+    }
+
     function monthKey(year, month) {
       return `${year}-${String(month + 1).padStart(2, '0')}`;
     }
@@ -192,11 +231,11 @@
       if (pageHead) pageHead.classList.toggle('hidden', name === 'calendar');
       document.getElementById('pageTitle').textContent = name.charAt(0).toUpperCase() + name.slice(1);
       if (name === 'calendar') {
-        if (!calendarAnchorWeekStart) {
-          jumpToCurrentMonth();
-          return;
+        if (!calendarState.hasRendered) {
+          renderCalendar({ preserveScroll: false, anchorDate: calendarState.anchorDate, jumpToDate: calendarState.anchorDate });
+        } else {
+          syncCalendarHeaderFromScroll();
         }
-        renderCalendar({ forceAnchor: false, preserveScroll: true });
       }
     }
 
@@ -468,6 +507,32 @@
       });
     }
 
+    function renderTopFeelRpe(feel, rpe) {
+      const node = document.getElementById('wvTopFeelRpe');
+      const sep = document.getElementById('wvHeadStatusSep');
+      if (!node) return;
+      const f = Number(feel || 0);
+      const r = Number(rpe || 0);
+      const icon = feelEmoji(f);
+      if (icon && r > 0) {
+        node.textContent = `${icon} ${r}`;
+        node.classList.remove('hidden');
+        if (sep) sep.classList.remove('hidden');
+      } else {
+        node.textContent = '';
+        node.classList.add('hidden');
+        if (sep) sep.classList.add('hidden');
+      }
+      renderTopComments();
+    }
+
+    function renderTopComments() {
+      const node = document.getElementById('wvTopComments');
+      if (!node) return;
+      const count = (modalDraft && Array.isArray(modalDraft.commentsFeed)) ? modalDraft.commentsFeed.length : 0;
+      node.textContent = count > 0 ? `💬 x${count}` : '💬';
+    }
+
     function commentsArrayFromEntity(entity) {
       if (!entity) return [];
       if (Array.isArray(entity.comments_feed)) {
@@ -481,11 +546,13 @@
       const wrap = document.getElementById('wvCommentsFeed');
       if (!modalDraft) {
         wrap.innerHTML = '';
+        renderTopComments();
         return;
       }
       const list = modalDraft.commentsFeed || [];
       if (!list.length) {
         wrap.innerHTML = '';
+        renderTopComments();
         return;
       }
       wrap.innerHTML = list.map((c, i) => `
@@ -494,6 +561,7 @@
           <button class="comment-delete" type="button" aria-label="Delete comment">🗑</button>
         </div>
       `).join('');
+      renderTopComments();
     }
 
     function commentCount(entity) {
@@ -705,19 +773,20 @@
         return;
       }
 
-      await loadData(false);
+      await loadData();
       if (closeAfter) {
         closeDetailModal();
       }
     }
 
-    async function deleteCurrentDetail() {
+    function deleteCurrentDetail() {
       if (!editingItemId) return;
-      if (!window.confirm('Are you sure you want to delete this?')) return;
-      const resp = await fetch(`/calendar-items/${editingItemId}`, { method: 'DELETE' });
-      if (!resp.ok) return;
-      closeDetailModal();
-      await loadData(false);
+      confirmDelete({ onConfirm: async () => {
+        const resp = await fetch(`/calendar-items/${editingItemId}`, { method: 'DELETE' });
+        if (!resp.ok) return;
+        closeDetailModal();
+        await loadData();
+      } });
     }
 
     function buildDayAggregateMap() {
@@ -837,25 +906,29 @@
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(copy),
             });
-            await loadData(false);
+            await loadData();
           },
         });
         opts.push({
           label: 'Delete',
-          onClick: async () => {
-            if (!window.confirm('Are you sure you want to delete this?')) return;
-            await fetch(`/calendar-items/${payload.data.id}`, { method: 'DELETE' });
-            await loadData(false);
+          onClick: () => {
+            closeContextMenu();
+            confirmDelete({ onConfirm: async () => {
+              await fetch(`/calendar-items/${payload.data.id}`, { method: 'DELETE' });
+              await loadData();
+            } });
           },
         });
       }
       if (payload.source === 'strava') {
         opts.push({
           label: 'Delete',
-          onClick: async () => {
-            if (!window.confirm('Are you sure you want to delete this?')) return;
-            await fetch(`/activities/${payload.data.id}`, { method: 'DELETE' });
-            await loadData(false);
+          onClick: () => {
+            closeContextMenu();
+            confirmDelete({ onConfirm: async () => {
+              await fetch(`/activities/${payload.data.id}`, { method: 'DELETE' });
+              await loadData();
+            } });
           },
         });
       }
@@ -868,7 +941,7 @@
           label: 'Unpair',
           onClick: async () => {
             await fetch(`/pairs/${currentPair.id}`, { method: 'DELETE' });
-            await loadData(false);
+            await loadData();
           },
         });
       }
@@ -893,7 +966,7 @@
           override_title: untitled,
         }),
       });
-      await loadData(false);
+      await loadData();
     }
 
     function updateRpeLabel() {
@@ -1001,16 +1074,17 @@
           renderWorkoutSummary(window.currentWorkoutPayload);
           await renderWorkoutAnalyze(window.currentWorkoutPayload);
           renderWorkoutFiles(window.currentWorkoutPayload);
-          await loadData(false);
+          await loadData();
         };
       }
       const delBtn = document.getElementById('wvDeleteFitBtn');
       if (delBtn) {
         delBtn.onclick = () => {
           if (!modalDraft) return;
-          if (!window.confirm('Are you sure you want to delete this?')) return;
-          modalDraft.pendingDeleteFit = true;
-          renderWorkoutFiles(window.currentWorkoutPayload);
+          confirmDelete({ onConfirm: () => {
+            modalDraft.pendingDeleteFit = true;
+            renderWorkoutFiles(window.currentWorkoutPayload);
+          } });
         };
       }
     }
@@ -1082,6 +1156,15 @@
           modalDraft.sportType = btn.dataset.sport || 'Other';
           document.getElementById('wvSportIcon').innerHTML = toSportIcon(modalDraft.sportType);
           document.getElementById('wvSportName').textContent = modalDraft.sportType;
+          if (window.currentWorkoutPayload) {
+            if (window.currentWorkoutPayload.planned) {
+              window.currentWorkoutPayload.planned.workout_type = modalDraft.sportType;
+            } else if (window.currentWorkoutPayload.data) {
+              window.currentWorkoutPayload.data.workout_type = modalDraft.sportType;
+              window.currentWorkoutPayload.data.type = modalDraft.sportType;
+            }
+            renderWorkoutSummary(window.currentWorkoutPayload);
+          }
           sportMenu.classList.add('hidden');
         });
       });
@@ -1148,16 +1231,47 @@
       const sport = (modalDraft && modalDraft.sportType) || 'Other';
       const distanceUnitLocal = document.getElementById('pcDistanceUnit').value || 'km';
       const elevationUnitLocal = document.getElementById('pcElevationUnit').value || 'm';
+      const globalDistanceUnit = appSettings.unit_system === 'imperial' ? 'mi' : 'km';
+      const globalElevationUnit = appSettings.unit_system === 'imperial' ? 'ft' : 'm';
+      const persistedDistanceUnit = closeAfter ? globalDistanceUnit : distanceUnitLocal;
+      const persistedElevationUnit = closeAfter ? globalElevationUnit : elevationUnitLocal;
       const plannedDuration = parseDurationToMin(document.getElementById('pcDurPlan').value);
       const plannedDistanceM = fromDisplayDistanceToMeters(document.getElementById('pcDistPlan').value, distanceUnitLocal);
       const plannedElevationM = fromDisplayElevationToMeters(document.getElementById('pcElevPlan').value, elevationUnitLocal);
       const plannedTss = Number(document.getElementById('pcTssPlan').value || 0);
       const plannedIf = Number(document.getElementById('pcIfPlan').value || 0);
+      const plannedAvgSpeedDisplay = Number(document.getElementById('pcAvgSpeedPlan').value || 0);
+      const plannedAvgSpeed = Number.isFinite(plannedAvgSpeedDisplay) && plannedAvgSpeedDisplay > 0
+        ? (distanceUnitLocal === 'mi'
+          ? (plannedAvgSpeedDisplay / 2.23694)
+          : (distanceUnitLocal === 'km'
+            ? (plannedAvgSpeedDisplay / 3.6)
+            : plannedAvgSpeedDisplay))
+        : 0;
+      const plannedCalories = Number(document.getElementById('pcCaloriesPlan').value || 0);
+      const plannedWorkKj = Number(document.getElementById('pcWorkPlan').value || 0);
       const completedDuration = parseDurationToMin(document.getElementById('pcDurComp').value);
       const completedDistanceM = fromDisplayDistanceToMeters(document.getElementById('pcDistComp').value, distanceUnitLocal);
       const completedElevationM = fromDisplayElevationToMeters(document.getElementById('pcElevComp').value, elevationUnitLocal);
       const completedTss = Number(document.getElementById('pcTssComp').value || 0);
       const completedIf = Number(document.getElementById('pcIfComp').value || 0);
+      const completedNp = Number(document.getElementById('pcNpComp').value || 0);
+      const completedWorkKj = Number(document.getElementById('pcWorkComp').value || 0);
+      const completedCalories = Number(document.getElementById('pcCaloriesComp').value || 0);
+      const completedHrMin = Number(document.getElementById('wvHrMin').value || 0);
+      const completedHrAvg = Number(document.getElementById('wvHrAvg').value || 0);
+      const completedHrMax = Number(document.getElementById('wvHrMax').value || 0);
+      const completedPowerMin = Number(document.getElementById('wvPowerMin').value || 0);
+      const completedPowerAvg = Number(document.getElementById('wvPowerAvg').value || 0);
+      const completedPowerMax = Number(document.getElementById('wvPowerMax').value || 0);
+      const completedAvgSpeedDisplay = Number(document.getElementById('pcAvgSpeedComp').value || 0);
+      const completedAvgSpeed = Number.isFinite(completedAvgSpeedDisplay) && completedAvgSpeedDisplay > 0
+        ? (distanceUnitLocal === 'mi'
+          ? (completedAvgSpeedDisplay / 2.23694)
+          : (distanceUnitLocal === 'km'
+            ? (completedAvgSpeedDisplay / 3.6)
+            : completedAvgSpeedDisplay))
+        : 0;
       const hasCompleted = completedDuration > 0 || completedDistanceM > 0 || completedTss > 0 || payload.source === 'strava';
       const hasAnyNumericValue = plannedDuration > 0
         || plannedDistanceM > 0
@@ -1197,10 +1311,13 @@
             distance_km: plannedDistanceM / 1000,
             distance_m: plannedDistanceM,
             elevation_m: plannedElevationM,
-            distance_unit: distanceUnitLocal,
-            elevation_unit: elevationUnitLocal,
+            distance_unit: persistedDistanceUnit,
+            elevation_unit: persistedElevationUnit,
             planned_tss: plannedTss,
             planned_if: plannedIf,
+            planned_avg_speed: plannedAvgSpeed,
+            planned_calories: plannedCalories,
+            planned_work_kj: plannedWorkKj,
             description,
             comments,
             comments_feed: commentsFeed,
@@ -1212,6 +1329,16 @@
             completed_elevation_m: completedElevationM,
             completed_tss: completedTss,
             completed_if: completedIf,
+            completed_np: completedNp,
+            completed_work_kj: completedWorkKj,
+            completed_calories: completedCalories,
+            completed_avg_speed: completedAvgSpeed,
+            completed_hr_min: completedHrMin,
+            completed_hr_avg: completedHrAvg,
+            completed_hr_max: completedHrMax,
+            completed_power_min: completedPowerMin,
+            completed_power_avg: completedPowerAvg,
+            completed_power_max: completedPowerMax,
           }),
         });
       } else if (payload.source === 'planned') {
@@ -1227,10 +1354,13 @@
             distance_km: plannedDistanceM / 1000,
             distance_m: plannedDistanceM,
             elevation_m: plannedElevationM,
-            distance_unit: distanceUnitLocal,
-            elevation_unit: elevationUnitLocal,
+            distance_unit: persistedDistanceUnit,
+            elevation_unit: persistedElevationUnit,
             planned_tss: plannedTss,
             planned_if: plannedIf,
+            planned_avg_speed: plannedAvgSpeed,
+            planned_calories: plannedCalories,
+            planned_work_kj: plannedWorkKj,
             description,
             comments,
             comments_feed: commentsFeed,
@@ -1242,6 +1372,16 @@
             completed_elevation_m: completedElevationM,
             completed_tss: completedTss,
             completed_if: completedIf,
+            completed_np: completedNp,
+            completed_work_kj: completedWorkKj,
+            completed_calories: completedCalories,
+            completed_avg_speed: completedAvgSpeed,
+            completed_hr_min: completedHrMin,
+            completed_hr_avg: completedHrAvg,
+            completed_hr_max: completedHrMax,
+            completed_power_min: completedPowerMin,
+            completed_power_avg: completedPowerAvg,
+            completed_power_max: completedPowerMax,
             intensity: Number(data.intensity || 6) || 6,
           }),
         });
@@ -1267,7 +1407,7 @@
           }),
         });
       }
-      await loadData(false);
+      await loadData();
       if (closeAfter || isNewDraft) await closeWorkoutModal(false);
     }
 
@@ -1313,7 +1453,7 @@
       const completedDistanceM = payload.source === 'strava'
         ? Number(data.distance || 0)
         : explicitCompleted ? Number(explicitCompleted.distance || 0) : Number((parentPlanned || data).completed_distance_m || 0);
-      const completedTss = payload.source === 'strava'
+      const completedTssRaw = payload.source === 'strava'
         ? activityToTss(data)
         : explicitCompleted ? Number(explicitCompleted.tss_override || 0) : 0;
       const typeLabel = parentPlanned
@@ -1325,6 +1465,7 @@
           ? new Date(data.start_date_local).toLocaleString()
           : `${data.date} (Planned)`;
       const plannedObj = parentPlanned || data;
+      const isCycling = String(typeLabel || '').toLowerCase().includes('bike') || String(typeLabel || '').toLowerCase().includes('ride');
       let distanceUnitLocal = String(plannedObj.distance_unit || distanceUnit || 'km');
       let elevationUnitLocal = String(plannedObj.elevation_unit || elevationUnit || 'm');
       syncUnitSelectValue('pcDistanceUnit', distanceUnitLocal, ['km', 'mi', 'm']);
@@ -1342,7 +1483,9 @@
       if (modalDraft) modalDraft.rpeTouched = savedRpe > 0;
       document.getElementById('wvRpe').value = String(savedRpe > 0 ? savedRpe : 1);
       document.getElementById('wvRpe').classList.toggle('rpe-unset', !(modalDraft && modalDraft.rpeTouched));
-      setFeelValue((parentPlanned && parentPlanned.feel) || data.feel || 0);
+      const savedFeel = (parentPlanned && parentPlanned.feel) || data.feel || 0;
+      setFeelValue(savedFeel);
+      renderTopFeelRpe(savedFeel, savedRpe);
 
       const plannedDuration = parentPlanned ? Number(parentPlanned.duration_min || 0) : Number(data.duration_min || 0);
       const plannedDistanceM = Number((plannedObj.distance_m || 0) || (Number(plannedObj.distance_km || 0) * 1000));
@@ -1352,13 +1495,38 @@
         : Number(plannedObj.completed_elevation_m || 0);
       const plannedTss = Number(plannedObj.planned_tss || 0) || (parentPlanned ? itemToTss(parentPlanned) : itemToTss(data));
       const plannedIf = plannedIF(plannedObj);
-      const completedIf = payload.source === 'strava' ? activityIF(data) : completedIF({
+      const completedIfRaw = payload.source === 'strava' ? activityIF(data) : completedIF({
         completed_if: plannedObj.completed_if,
-        completed_tss: completedTss,
+        completed_tss: completedTssRaw,
         moving_time: completedDurationMin * 60,
         avg_power: data.avg_power,
         type: plannedObj.workout_type || data.type,
       });
+      const fitComputedNp = Number((data.np_value ?? data.normalized_power ?? data.np ?? plannedObj.completed_np) || 0);
+      const fitComputedIf = Number((data.if_value ?? completedIfRaw) || 0);
+      const fitComputedTss = Number((data.tss_override ?? completedTssRaw) || 0);
+      const completedNp = fitComputedNp > 0 ? fitComputedNp : null;
+      let completedIf = fitComputedIf > 0 ? fitComputedIf : null;
+      let completedTss = fitComputedTss > 0 ? fitComputedTss : null;
+      if (isCycling && !completedNp) {
+        completedIf = null;
+        completedTss = null;
+      }
+      const completedWorkKj = Number((data.work_kj ?? plannedObj.completed_work_kj ?? 0) || 0);
+      const completedCalories = Number((data.calories ?? plannedObj.completed_calories ?? 0) || 0);
+      const plannedAvgSpeed = Number(plannedObj.planned_avg_speed || 0);
+      const plannedCalories = Number(plannedObj.planned_calories || 0);
+      const plannedWorkKj = Number(plannedObj.planned_work_kj || 0);
+      const compAvgSpeed = payload.source === 'strava'
+        ? Number(data.avg_speed || 0)
+        : Number(plannedObj.completed_avg_speed || 0);
+      const speedLabel = distanceUnitLocal === 'mi' ? 'mph' : (distanceUnitLocal === 'm' ? 'm/s' : 'km/h');
+      const speedToDisplay = (v) => {
+        if (!Number.isFinite(v) || v <= 0) return '';
+        if (distanceUnitLocal === 'mi') return (v * 2.23694).toFixed(1);
+        if (distanceUnitLocal === 'm') return v.toFixed(2);
+        return (v * 3.6).toFixed(1);
+      };
 
       document.getElementById('pcDurPlan').value = plannedDuration ? formatDurationClock(plannedDuration) : '';
       document.getElementById('pcDurComp').value = completedDurationMin ? formatDurationClock(completedDurationMin) : '';
@@ -1374,12 +1542,21 @@
       document.getElementById('pcTssComp').value = completedTss ? String(Math.round(completedTss)) : '';
       document.getElementById('pcIfPlan').value = plannedIf ? Number(plannedIf).toFixed(2) : '';
       document.getElementById('pcIfComp').value = completedIf ? Number(completedIf).toFixed(2) : '';
-      document.getElementById('wvHrMin').value = data.min_hr ? String(Math.round(data.min_hr)) : '';
-      document.getElementById('wvHrAvg').value = data.avg_hr ? String(Math.round(data.avg_hr)) : '';
-      document.getElementById('wvHrMax').value = data.max_hr ? String(Math.round(data.max_hr)) : '';
-      document.getElementById('wvPowerMin').value = data.min_power ? String(Math.round(data.min_power)) : '';
-      document.getElementById('wvPowerAvg').value = data.avg_power ? String(Math.round(data.avg_power)) : '';
-      document.getElementById('wvPowerMax').value = data.max_power ? String(Math.round(data.max_power)) : '';
+      document.getElementById('pcAvgSpeedPlan').value = speedToDisplay(plannedAvgSpeed);
+      document.getElementById('pcAvgSpeedComp').value = speedToDisplay(compAvgSpeed);
+      document.getElementById('pcCaloriesPlan').value = plannedCalories > 0 ? String(Math.round(plannedCalories)) : '';
+      document.getElementById('pcCaloriesComp').value = completedCalories > 0 ? String(Math.round(completedCalories)) : '';
+      document.getElementById('pcNpPlan').value = '';
+      document.getElementById('pcNpComp').value = completedNp ? String(Math.round(completedNp)) : '';
+      document.getElementById('pcWorkPlan').value = plannedWorkKj > 0 ? String(Math.round(plannedWorkKj)) : '';
+      document.getElementById('pcWorkComp').value = completedWorkKj > 0 ? String(Math.round(completedWorkKj)) : '';
+      document.querySelector('#pcAvgSpeedPlan').closest('.tp-row').querySelector('.tp-unit').textContent = speedLabel;
+      document.getElementById('wvHrMin').value = (data.min_hr ?? plannedObj.completed_hr_min) ? String(Math.round(data.min_hr ?? plannedObj.completed_hr_min)) : '';
+      document.getElementById('wvHrAvg').value = (data.avg_hr ?? plannedObj.completed_hr_avg) ? String(Math.round(data.avg_hr ?? plannedObj.completed_hr_avg)) : '';
+      document.getElementById('wvHrMax').value = (data.max_hr ?? plannedObj.completed_hr_max) ? String(Math.round(data.max_hr ?? plannedObj.completed_hr_max)) : '';
+      document.getElementById('wvPowerMin').value = (data.min_power ?? plannedObj.completed_power_min) ? String(Math.round(data.min_power ?? plannedObj.completed_power_min)) : '';
+      document.getElementById('wvPowerAvg').value = (data.avg_power ?? plannedObj.completed_power_avg) ? String(Math.round(data.avg_power ?? plannedObj.completed_power_avg)) : '';
+      document.getElementById('wvPowerMax').value = (data.max_power ?? plannedObj.completed_power_max) ? String(Math.round(data.max_power ?? plannedObj.completed_power_max)) : '';
       if (data.fit_id) {
         fetch(`/fit/${data.fit_id}`).then(r => r.ok ? r.json() : null).then((fit) => {
           if (!fit) return;
@@ -1409,6 +1586,63 @@
         el.classList.remove('muted');
         el.oninput = null;
       });
+      const completedFieldIds = ['pcDurComp', 'pcDistComp', 'pcElevComp', 'pcTssComp', 'pcIfComp', 'pcAvgSpeedComp', 'pcCaloriesComp', 'pcNpComp', 'pcWorkComp', 'wvHrMin', 'wvHrAvg', 'wvHrMax', 'wvPowerAvg', 'wvPowerMax'];
+      const futureWorkout = isFutureDateKey(parentPlanned ? parentPlanned.date : data.date);
+      completedFieldIds.forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.disabled = futureWorkout;
+        el.classList.toggle('muted', futureWorkout);
+        el.classList.toggle('no-entry', futureWorkout);
+      });
+      const powerMinNode = document.getElementById('wvPowerMin');
+      powerMinNode.disabled = true;
+      powerMinNode.readOnly = true;
+      powerMinNode.classList.add('muted', 'no-entry');
+      const npPlanNode = document.getElementById('pcNpPlan');
+      npPlanNode.disabled = true;
+      npPlanNode.readOnly = true;
+      npPlanNode.classList.add('muted', 'no-entry');
+
+      const cyclingRows = ['pcAvgSpeedPlan', 'pcCaloriesPlan', 'pcNpPlan', 'pcWorkPlan'];
+      cyclingRows.forEach((id) => {
+        const row = document.getElementById(id).closest('.tp-row');
+        if (row) row.style.display = isCycling ? '' : 'none';
+      });
+
+      function recalcDerivedLive() {
+        const pDurMin = parseDurationToMin(document.getElementById('pcDurPlan').value);
+        const cDurMin = parseDurationToMin(document.getElementById('pcDurComp').value);
+        const pDistM = fromDisplayDistanceToMeters(document.getElementById('pcDistPlan').value, distanceUnitLocal);
+        const cDistM = fromDisplayDistanceToMeters(document.getElementById('pcDistComp').value, distanceUnitLocal);
+        if (pDurMin > 0 && pDistM > 0) {
+          const pSpeedMps = pDistM / (pDurMin * 60);
+          document.getElementById('pcAvgSpeedPlan').value = speedToDisplay(pSpeedMps);
+        }
+        if (cDurMin > 0 && cDistM > 0) {
+          const cSpeedMps = cDistM / (cDurMin * 60);
+          document.getElementById('pcAvgSpeedComp').value = speedToDisplay(cSpeedMps);
+        }
+        if (!data.fit_id) {
+          const ftpRide = Number((appSettings.ftp || {}).ride || 0);
+          const avgPower = Number(document.getElementById('wvPowerAvg').value || 0);
+          if (avgPower > 0 && cDurMin > 0) {
+            const durS = cDurMin * 60;
+            const np = avgPower;
+            document.getElementById('pcNpComp').value = String(Math.round(np));
+            document.getElementById('pcWorkComp').value = String(Math.round((np * durS) / 1000));
+            if (!document.getElementById('pcCaloriesComp').value) {
+              document.getElementById('pcCaloriesComp').value = String(Math.round((np * durS) / 1000));
+            }
+            if (ftpRide > 0) {
+              const ifv = np / ftpRide;
+              const tss = (durS * np * ifv) / (ftpRide * 3600) * 100;
+              document.getElementById('pcIfComp').value = ifv.toFixed(2);
+              document.getElementById('pcTssComp').value = String(Math.round(tss));
+            }
+          }
+        }
+      }
 
       const syncDistanceUnits = (nextUnit) => {
         const planMeters = fromDisplayDistanceToMeters(document.getElementById('pcDistPlan').value, distanceUnitLocal);
@@ -1433,21 +1667,34 @@
       ['pcDurPlan', 'pcDurComp', 'pcTssPlan', 'pcTssComp', 'pcIfPlan', 'pcIfComp'].forEach((id) => {
         document.getElementById(id).onchange = recalcIfTssRows;
       });
+      ['pcDurPlan', 'pcDurComp', 'pcDistPlan', 'pcDistComp', 'wvPowerAvg'].forEach((id) => {
+        const n = document.getElementById(id);
+        if (!n) return;
+        n.oninput = () => {
+          recalcIfTssRows();
+          recalcDerivedLive();
+        };
+      });
+      recalcDerivedLive();
     }
 
     async function renderWorkoutAnalyze(payload) {
       const data = payload.data || {};
+      const chart = document.getElementById('wvChart');
+      const lapBody = document.querySelector('#wvLapTable tbody');
+      const statsNode = document.getElementById('wvSelectionKv');
       if (!data.fit_id) {
-        document.getElementById('wvSelectionKv').innerHTML = '<div>No FIT stream for this workout.</div>';
-        document.querySelector('#wvLapTable tbody').innerHTML = '';
-        document.getElementById('wvChart').innerHTML = '';
-        document.getElementById('wvViewfinder').innerHTML = '';
+        statsNode.innerHTML = '<div>No FIT stream for this workout.</div>';
+        lapBody.innerHTML = '';
+        chart.innerHTML = '';
         return;
       }
 
       const resp = await fetch(`/fit/${data.fit_id}`);
       if (!resp.ok) {
-        document.getElementById('wvSelectionKv').innerHTML = '<div>Could not load FIT data.</div>';
+        statsNode.innerHTML = '<div>Could not load FIT data.</div>';
+        lapBody.innerHTML = '';
+        chart.innerHTML = '';
         return;
       }
       const fit = await resp.json();
@@ -1455,21 +1702,30 @@
       const laps = Array.isArray(fit.laps) ? fit.laps : [];
       const summary = fit.summary || {};
       if (!series.length) {
-        document.getElementById('wvSelectionKv').innerHTML = '<div>No FIT points available.</div>';
+        statsNode.innerHTML = '<div>No FIT points available.</div>';
+        lapBody.innerHTML = '';
+        chart.innerHTML = '';
         return;
       }
 
       const baseMs = new Date(series[0].timestamp).getTime();
       const pts = series.map((p) => ({
         t: timeToSec(p.timestamp, baseMs),
+        timestamp: p.timestamp,
         heart_rate: num(p.heart_rate),
         speed: num(p.speed),
         distance: num(p.distance),
         cadence: num(p.cadence),
         power: num(p.power),
-        altitude: num(p.altitude),
       }));
       const totalSec = Math.max(1, pts[pts.length - 1].t - pts[0].t);
+
+      const lineMeta = [
+        { key: 'cadence', color: '#f39b1f', label: 'RPM', side: 'left', unit: 'RPM' },
+        { key: 'heart_rate', color: '#f35353', label: 'BPM', side: 'right', unit: 'BPM' },
+        { key: 'power', color: '#cc44f0', label: 'W', side: 'left', unit: 'W' },
+        { key: 'speed', color: '#3fa144', label: 'MPH', side: 'right', unit: (distanceUnit === 'mi' ? 'MPH' : 'KM/H') },
+      ];
 
       analyzeState = {
         pts,
@@ -1477,190 +1733,535 @@
         totalSec,
         wStart: 0,
         wEnd: totalSec,
+        selection: null,
+        hiddenChannels: new Set(),
+        deletedChannels: new Set(),
+        cursorSvgX: -1,
+        smoothingStep: 2,
+        smoothedCache: new Map(),
+        zoomStack: [],
       };
 
-      const chart = document.getElementById('wvChart');
-      const finder = document.getElementById('wvViewfinder');
-      const left = 54;
-      const right = 170;
-      const top = 14;
-      const bottom = 28;
       const w = 1200;
-      const h = 360;
+      const h = 180;
+      const left = 78;
+      const right = 78;
+      const top = 14;
+      const bottom = 30;
       const cw = w - left - right;
       const ch = h - top - bottom;
-      const lineMeta = [
-        { key: 'heart_rate', color: '#f35353', label: 'HR' },
-        { key: 'power', color: '#ff62f2', label: 'W' },
-        { key: 'cadence', color: '#f39b1f', label: 'RPM' },
-        { key: 'speed', color: '#3fa144', label: 'MPH' },
-      ];
 
-      function valPath(meta, inWindow) {
-        const vals = inWindow.map(p => p[meta.key]).filter(v => v !== null);
-        if (!vals.length) return { path: '', min: 0, max: 1, avg: null };
-        const min = Math.min(...vals);
-        const max = Math.max(...vals);
-        const span = Math.max(0.001, max - min);
-        const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
-        let started = false;
-        let d = '';
-        inWindow.forEach((p) => {
-          const v = p[meta.key];
-          if (v === null) return;
-          const x = left + ((p.t - analyzeState.wStart) / Math.max(1, analyzeState.wEnd - analyzeState.wStart)) * cw;
-          const y = top + (1 - ((v - min) / span)) * ch;
-          d += `${started ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)} `;
-          started = true;
-        });
-        return { path: d.trim(), min, max, avg };
+      chart.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      chart.setAttribute('height', String(h));
+
+      const zoomBtn = document.getElementById('wvZoomBtn');
+      const cutBtn = document.getElementById('wvCutBtn');
+      const unzoomBtn = document.getElementById('wvUnzoomBtn');
+      const smoothingStep = document.getElementById('wvSmoothingStep');
+      const channelNode = document.getElementById('wvAnalyzeChannelsTop');
+      const selectionTitle = document.getElementById('wvSelectionTitle');
+      let activeChannelPopup = null;
+
+      const existsChannel = (key) => pts.some((p) => p[key] !== null);
+      const toDisplaySpeed = (v) => (distanceUnit === 'mi' ? (v * 2.23694) : (v * 3.6));
+      const toDisplayPace = (speedMps) => {
+        if (!speedMps || speedMps <= 0) return null;
+        const sec = (distanceUnit === 'mi' ? 1609.344 : 1000) / speedMps;
+        const m = Math.floor(sec / 60);
+        const s = Math.round(sec % 60);
+        return `${m}:${String(s).padStart(2, '0')}`;
+      };
+      const speedUnitLabel = distanceUnit === 'mi' ? 'MPH' : 'KM/H';
+      const paceUnitLabel = distanceUnit === 'mi' ? 'min/mi' : 'min/km';
+
+      function fmtTimeShort(iso) {
+        if (!iso) return '';
+        const dt = new Date(iso);
+        if (Number.isNaN(dt.getTime())) return '';
+        return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       }
 
-      function inWindow() {
-        return pts.filter(p => p.t >= analyzeState.wStart && p.t <= analyzeState.wEnd);
+      function smoothedValues(key) {
+        const step = Math.max(1, Number(analyzeState.smoothingStep || 2));
+        const cacheKey = `${key}:${step}`;
+        if (analyzeState.smoothedCache.has(cacheKey)) return analyzeState.smoothedCache.get(cacheKey);
+        if (step <= 1) {
+          const raw = pts.map((p) => p[key]);
+          analyzeState.smoothedCache.set(cacheKey, raw);
+          return raw;
+        }
+        const half = Math.max(1, (step * step) - 1);
+        const out = new Array(pts.length).fill(null);
+        for (let i = 0; i < pts.length; i += 1) {
+          let sum = 0;
+          let count = 0;
+          const start = Math.max(0, i - half);
+          const end = Math.min(pts.length - 1, i + half);
+          for (let j = start; j <= end; j += 1) {
+            const v = pts[j][key];
+            if (v !== null) {
+              sum += v;
+              count += 1;
+            }
+          }
+          out[i] = count ? (sum / count) : null;
+        }
+        analyzeState.smoothedCache.set(cacheKey, out);
+        return out;
+      }
+
+      function valueForAxis(key, value) {
+        if (value == null) return null;
+        if (key === 'speed') return toDisplaySpeed(value);
+        return value;
+      }
+
+      function visibleChannels() {
+        return lineMeta.filter((m) => existsChannel(m.key) && !analyzeState.hiddenChannels.has(m.key) && !analyzeState.deletedChannels.has(m.key));
+      }
+
+      function findNearestPointAt(time) {
+        let nearest = pts[0];
+        let best = Infinity;
+        for (let i = 0; i < pts.length; i += 1) {
+          const d = Math.abs(pts[i].t - time);
+          if (d < best) {
+            best = d;
+            nearest = pts[i];
+          }
+        }
+        return nearest;
+      }
+
+      function timeToX(t) {
+        return left + ((t - analyzeState.wStart) / Math.max(1, analyzeState.wEnd - analyzeState.wStart)) * cw;
+      }
+
+      function plotMouseToTime(ev) {
+        const rect = chart.getBoundingClientRect();
+        const x = ev.clientX - rect.left;
+        const clamped = Math.max(0, Math.min(rect.width, x));
+        const leftPx = (left / w) * rect.width;
+        const plotWidthPx = (cw / w) * rect.width;
+        const plotX = Math.max(0, Math.min(plotWidthPx, clamped - leftPx));
+        const frac = plotX / Math.max(1, plotWidthPx);
+        return {
+          time: analyzeState.wStart + frac * (analyzeState.wEnd - analyzeState.wStart),
+          svgX: left + frac * cw,
+        };
+      }
+
+      function statsForRange(startT, endT) {
+        const win = pts.filter((p) => p.t >= startT && p.t <= endT);
+        const duration = Math.max(1, endT - startT);
+        const frac = duration / totalSec;
+        const dVals = win.map((p) => p.distance).filter((v) => v !== null);
+        const distance = dVals.length > 1 ? Math.max(0, dVals[dVals.length - 1] - dVals[0]) : (Number(summary.distance_m || 0) * frac);
+        const totalTss = Number(summary.tss || data.tss_override || activityToTss(data) || 0);
+        const tss = totalTss > 0 ? (totalTss * frac) : null;
+        const minVal = (k) => {
+          const vals = win.map((p) => p[k]).filter((v) => v !== null);
+          return vals.length ? Math.min(...vals) : null;
+        };
+        const mean = (k) => {
+          const vals = win.map((p) => p[k]).filter((v) => v !== null);
+          return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+        };
+        const maxVal = (k) => {
+          const vals = win.map((p) => p[k]).filter((v) => v !== null);
+          return vals.length ? Math.max(...vals) : null;
+        };
+        return { duration, distance, tss, minVal, mean, maxVal };
       }
 
       function renderSelectionStats() {
-        const win = inWindow();
-        const duration = Math.max(1, analyzeState.wEnd - analyzeState.wStart);
-        const frac = duration / totalSec;
-        const distance = Number(summary.distance_m || 0) * frac;
-        const mean = (k) => {
-          const vals = win.map(p => p[k]).filter(v => v !== null);
-          return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+        const sel = analyzeState.selection;
+        const isZoomed = analyzeState.wStart > 0 || analyzeState.wEnd < totalSec;
+        if (selectionTitle) selectionTitle.textContent = (sel || isZoomed) ? 'Selection' : 'Entire Workout';
+        const startT = sel ? Math.min(sel.start, sel.end) : analyzeState.wStart;
+        const endT = sel ? Math.max(sel.start, sel.end) : analyzeState.wEnd;
+        const { duration, distance, tss, minVal, mean, maxVal } = statsForRange(startT, endT);
+        const metricRows = [];
+        const pushRow = (name, key, unit, convert = (v) => v) => {
+          const min = minVal(key);
+          const avg = mean(key);
+          const max = maxVal(key);
+          if (avg == null && min == null && max == null) return;
+          metricRows.push(`
+            <tr>
+              <td>${name}</td>
+              <td>${min == null ? '' : Math.round(convert(min))}</td>
+              <td>${avg == null ? '' : Math.round(convert(avg))}</td>
+              <td>${max == null ? '' : Math.round(convert(max))}</td>
+              <td>${unit}</td>
+            </tr>
+          `);
         };
-        document.getElementById('wvSelectionKv').innerHTML = `
-          <div>Duration<strong>${hms(duration)}</strong></div>
-          <div>Distance<strong>${fmtDistanceMeters(distance)}</strong></div>
-          <div>Avg HR<strong>${mean('heart_rate') ? Math.round(mean('heart_rate')) : '--'}</strong></div>
-          <div>Avg Power<strong>${mean('power') ? `${Math.round(mean('power'))} W` : '--'}</strong></div>
-          <div>Avg Cadence<strong>${mean('cadence') ? `${Math.round(mean('cadence'))} rpm` : '--'}</strong></div>
-          <div>Avg Speed<strong>${mean('speed') ? fmtAxis(mean('speed'), 'speed') : '--'}</strong></div>
-          <div>Elevation Gain<strong>${summary.elev_gain_m ? fmtElevation(summary.elev_gain_m) : '--'}</strong></div>
+        pushRow('Power', 'power', 'W');
+        pushRow('Heart Rate', 'heart_rate', 'BPM');
+        pushRow('Cadence', 'cadence', 'RPM');
+        pushRow('Speed', 'speed', speedUnitLabel, toDisplaySpeed);
+        const paceAvg = mean('speed');
+        if (paceAvg != null && paceAvg > 0) {
+          metricRows.push(`
+            <tr>
+              <td>Pace</td>
+              <td></td>
+              <td>${toDisplayPace(paceAvg) || ''}</td>
+              <td></td>
+              <td>${paceUnitLabel}</td>
+            </tr>
+          `);
+        }
+
+        statsNode.innerHTML = `
+          <div class="selection-top-row">
+            <div class="selection-top-cell">Duration<strong>${hms(duration)}</strong></div>
+            <div class="selection-top-cell">Distance<strong>${fmtDistanceMeters(distance)}</strong></div>
+            <div class="selection-top-cell">TSS<strong>${tss == null ? '' : Math.round(tss)}</strong></div>
+          </div>
+          <table class="selection-metrics">
+            <thead>
+              <tr><th>Metric</th><th>Min</th><th>Avg</th><th>Max</th><th>Unit</th></tr>
+            </thead>
+            <tbody>${metricRows.join('')}</tbody>
+          </table>
         `;
+      }
+
+      function renderChannelList() {
+        channelNode.innerHTML = '';
+        const closeChannelPopup = () => {
+          if (activeChannelPopup) {
+            activeChannelPopup.remove();
+            activeChannelPopup = null;
+          }
+        };
+        lineMeta
+          .filter((m) => existsChannel(m.key) && !analyzeState.deletedChannels.has(m.key))
+          .forEach((m) => {
+          const isHidden = analyzeState.hiddenChannels.has(m.key);
+          const item = document.createElement('button');
+          item.type = 'button';
+          const activeCls = !isHidden ? ' active' : '';
+          item.className = `analyze-channel-item${activeCls}`;
+          item.innerHTML = `
+            <span class="channel-name${isHidden ? ' hidden-ch' : ''}">${m.label}</span>
+          `;
+          item.style.background = isHidden ? '' : m.color;
+          item.style.borderColor = isHidden ? '' : m.color;
+          item.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            closeChannelPopup();
+            const popup = document.createElement('div');
+            popup.className = 'channel-popup';
+            popup.innerHTML = `
+              <button data-action="show-all">Show All</button>
+              <button data-action="${isHidden ? 'show' : 'hide'}">${isHidden ? 'Show' : 'Hide'}</button>
+              <button data-action="hide-others">Hide Others</button>
+              <button data-action="delete" class="ch-danger">Delete</button>
+            `;
+            popup.querySelectorAll('button').forEach((btn) => {
+              btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.action;
+                if (action === 'show-all') {
+                  analyzeState.hiddenChannels.clear();
+                  analyzeState.deletedChannels.clear();
+                } else if (action === 'show') {
+                  analyzeState.hiddenChannels.delete(m.key);
+                } else if (action === 'hide') {
+                  const currentlyVisible = visibleChannels().length;
+                  if (currentlyVisible > 1) {
+                    analyzeState.hiddenChannels.add(m.key);
+                  } else {
+                    analyzeState.hiddenChannels.clear();
+                  }
+                } else if (action === 'hide-others') {
+                  analyzeState.hiddenChannels.clear();
+                  lineMeta.forEach((c) => {
+                    if (c.key !== m.key && !analyzeState.deletedChannels.has(c.key) && existsChannel(c.key)) {
+                      analyzeState.hiddenChannels.add(c.key);
+                    }
+                  });
+                } else if (action === 'delete') {
+                  analyzeState.deletedChannels.add(m.key);
+                  analyzeState.hiddenChannels.delete(m.key);
+                }
+                popup.remove();
+                renderChannelList();
+                renderMain();
+              });
+            });
+            document.body.appendChild(popup);
+            const rect = item.getBoundingClientRect();
+            const x = rect.left + (rect.width / 2) - (popup.offsetWidth / 2);
+            const y = rect.top - popup.offsetHeight - 8;
+            popup.style.left = `${Math.max(6, x)}px`;
+            popup.style.top = `${Math.max(6, y)}px`;
+            activeChannelPopup = popup;
+            const close = (evt) => {
+              if (!popup.contains(evt.target) && !item.contains(evt.target)) {
+                closeChannelPopup();
+                document.removeEventListener('click', close);
+              }
+            };
+            setTimeout(() => document.addEventListener('click', close), 0);
+          });
+          channelNode.appendChild(item);
+        });
       }
 
       function renderMain() {
-        const win = inWindow();
-        const xTicks = 5;
-        const paths = lineMeta.map(m => ({ ...m, ...valPath(m, win) }));
-        let svg = `<rect x="0" y="0" width="${w}" height="${h}" fill="#f3f7fd" stroke="#d6e1ee"></rect>`;
+        const xTicks = 6;
+        const range = Math.max(1, analyzeState.wEnd - analyzeState.wStart);
+        let svg = `<rect x="0" y="0" width="${w}" height="${h}" fill="#f3f7fd" stroke="#d6e1ee" rx="4"/>`;
+        svg += `<rect x="${left}" y="${top}" width="${cw}" height="${ch}" fill="none" stroke="#d7dde6" stroke-width="0.9"/>`;
         for (let i = 0; i <= xTicks; i += 1) {
           const x = left + (i / xTicks) * cw;
-          svg += `<line x1="${x}" y1="${top}" x2="${x}" y2="${top + ch}" stroke="#e1eaf5"/>`;
-          const sec = analyzeState.wStart + (i / xTicks) * (analyzeState.wEnd - analyzeState.wStart);
-          svg += `<text x="${x}" y="${h - 8}" fill="#5b7290" font-size="11" text-anchor="middle">${hms(sec)}</text>`;
+          const sec = analyzeState.wStart + (i / xTicks) * range;
+          svg += `<line x1="${x}" y1="${top}" x2="${x}" y2="${top + ch}" stroke="#dde8f4" stroke-width="1"/>`;
+          svg += `<text x="${x}" y="${h - 8}" fill="#6b8099" font-size="10" text-anchor="middle">${hms(sec)}</text>`;
         }
-        paths.forEach((p) => {
-          if (p.path) svg += `<path d="${p.path}" stroke="${p.color}" stroke-width="2" fill="none"></path>`;
+
+        const tickVals = (min, max, count = 5) => {
+          const span = Math.max(1e-6, max - min);
+          const out = [];
+          for (let i = 0; i <= count; i += 1) out.push(min + ((count - i) / count) * span);
+          return out;
+        };
+        const axisForChannel = (meta) => {
+          const smooth = smoothedValues(meta.key);
+          const vals = [];
+          for (let i = 0; i < pts.length; i += 1) {
+            const point = pts[i];
+            if (point.t < analyzeState.wStart || point.t > analyzeState.wEnd) continue;
+            const v = valueForAxis(meta.key, smooth[i]);
+            if (v !== null) vals.push(v);
+          }
+          if (!vals.length) return null;
+          const min = Math.min(...vals);
+          const max = Math.max(...vals);
+          const pad = Math.max(1, (max - min) * 0.06);
+          return { meta, min: min - pad, max: max + pad, ticks: tickVals(min - pad, max + pad, 5) };
+        };
+        const axisOffsets = {
+          cadence: { x: left - 8, tickX1: left, tickX2: left - 5, anchor: 'end' },
+          power: { x: left - 46, tickX1: left, tickX2: left - 5, anchor: 'end' },
+          heart_rate: { x: left + cw + 8, tickX1: left + cw, tickX2: left + cw + 5, anchor: 'start' },
+          speed: { x: left + cw + 46, tickX1: left + cw, tickX2: left + cw + 5, anchor: 'start' },
+        };
+        visibleChannels().forEach((meta) => {
+          const axis = axisForChannel(meta);
+          if (!axis || !axisOffsets[meta.key]) return;
+          const off = axisOffsets[meta.key];
+          axis.ticks.forEach((t) => {
+            const y = top + ((axis.max - t) / Math.max(1e-6, axis.max - axis.min)) * ch;
+            svg += `<line x1="${off.tickX1}" y1="${y}" x2="${off.tickX2}" y2="${y}" stroke="${meta.color}" stroke-width="0.7"/>`;
+            svg += `<text x="${off.x}" y="${y + 2.5}" fill="${meta.color}" font-size="7.5" text-anchor="${off.anchor}">${Math.round(t)}</text>`;
+          });
         });
-        paths.forEach((p, idx) => {
-          const y = top + 14 + idx * 24;
-          svg += `<text x="${w - right + 6}" y="${y}" fill="${p.color}" font-size="11">${p.label} ${fmtAxis(p.max, p.key)} / ${fmtAxis(p.min, p.key)}</text>`;
+
+        if (analyzeState.selection) {
+          const sx1 = timeToX(Math.min(analyzeState.selection.start, analyzeState.selection.end));
+          const sx2 = timeToX(Math.max(analyzeState.selection.start, analyzeState.selection.end));
+          svg += `<rect x="${sx1.toFixed(1)}" y="${top}" width="${Math.max(1, sx2 - sx1).toFixed(1)}" height="${ch}" fill="rgba(50,120,255,0.12)" stroke="rgba(40,100,240,0.35)" stroke-width="1"/>`;
+        }
+
+        visibleChannels().forEach((meta) => {
+          const smooth = smoothedValues(meta.key);
+          const win = [];
+          for (let i = 0; i < pts.length; i += 1) {
+            if (pts[i].t >= analyzeState.wStart && pts[i].t <= analyzeState.wEnd && smooth[i] !== null) {
+              win.push({ t: pts[i].t, v: smooth[i] });
+            }
+          }
+          if (!win.length) return;
+          const min = Math.min(...win.map((x) => x.v));
+          const max = Math.max(...win.map((x) => x.v));
+          const span = Math.max(0.001, max - min);
+          let d = '';
+          win.forEach((p, idx) => {
+            const x = timeToX(p.t);
+            const y = top + (1 - ((p.v - min) / span)) * ch;
+            d += `${idx ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)} `;
+          });
+          svg += `<path d="${d.trim()}" stroke="${meta.color}" stroke-width="0.75" opacity="0.95" fill="none" stroke-linecap="butt" stroke-linejoin="miter" shape-rendering="geometricPrecision"/>`;
         });
+
         chart.innerHTML = svg;
+        if (analyzeState.cursorSvgX >= 0) {
+          const ns = 'http://www.w3.org/2000/svg';
+          const line = document.createElementNS(ns, 'line');
+          line.setAttribute('x1', String(analyzeState.cursorSvgX));
+          line.setAttribute('x2', String(analyzeState.cursorSvgX));
+          line.setAttribute('y1', String(top));
+          line.setAttribute('y2', String(top + ch));
+          line.setAttribute('stroke', '#2a66d2');
+          line.setAttribute('stroke-width', '1');
+          line.setAttribute('stroke-dasharray', '4 3');
+          line.setAttribute('opacity', '0.75');
+          chart.appendChild(line);
+        }
+        const canZoom = !!(analyzeState.selection && Math.abs(analyzeState.selection.end - analyzeState.selection.start) > 1);
+        const isZoomed = analyzeState.wStart > 0 || analyzeState.wEnd < totalSec;
+        zoomBtn.textContent = isZoomed && !canZoom ? 'Unzoom' : 'Zoom';
+        zoomBtn.disabled = !canZoom && !isZoomed;
+        cutBtn.disabled = !canZoom;
+        if (unzoomBtn) unzoomBtn.classList.add('hidden');
         renderSelectionStats();
       }
 
-      function renderFinder() {
-        const fw = 1200;
-        const fh = 90;
-        const px = (t) => (t / totalSec) * fw;
-        const speedVals = pts.map(p => p.speed).filter(v => v !== null);
-        const sMin = speedVals.length ? Math.min(...speedVals) : 0;
-        const sMax = speedVals.length ? Math.max(...speedVals) : 1;
-        const sSpan = Math.max(0.001, sMax - sMin);
-        let d = '';
-        let started = false;
-        pts.forEach((p) => {
-          if (p.speed === null) return;
-          const x = px(p.t);
-          const y = 6 + (1 - ((p.speed - sMin) / sSpan)) * (fh - 24);
-          d += `${started ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)} `;
-          started = true;
-        });
-        const bx = px(analyzeState.wStart);
-        const bw = Math.max(8, px(analyzeState.wEnd) - bx);
-        finder.innerHTML = `
-          <rect x="0" y="0" width="${fw}" height="${fh}" fill="#edf3fb" stroke="#d6e1ee"></rect>
-          <path d="${d}" stroke="#3fa144" stroke-width="1.5" fill="none"></path>
-          <rect id="wvBrush" x="${bx}" y="2" width="${bw}" height="${fh - 4}" fill="rgba(80,150,255,.22)" stroke="#2a66d2"></rect>
-        `;
+      function hideCursorTooltip() {
+        analyzeState.cursorSvgX = -1;
+        const tooltip = document.getElementById('wvCursorTooltip');
+        tooltip.classList.add('hidden');
       }
 
-      let dragging = false;
-      let dragOffset = 0;
-      finder.onmousedown = (ev) => {
-        const rect = finder.getBoundingClientRect();
-        const x = ((ev.clientX - rect.left) / rect.width) * 1200;
-        const b = finder.querySelector('#wvBrush');
-        const bx = Number(b.getAttribute('x'));
-        const bw = Number(b.getAttribute('width'));
-        if (x >= bx && x <= bx + bw) {
-          dragging = true;
-          dragOffset = x - bx;
-        } else {
-          const center = x / 1200;
-          const span = (analyzeState.wEnd - analyzeState.wStart) / totalSec;
-          let s = Math.max(0, center - span / 2);
-          let e = Math.min(1, center + span / 2);
-          if (e - s < span) s = Math.max(0, e - span);
-          analyzeState.wStart = s * totalSec;
-          analyzeState.wEnd = e * totalSec;
-          renderFinder();
-          renderMain();
-        }
+      function updateCursor(ev) {
+        const { time, svgX } = plotMouseToTime(ev);
+        analyzeState.cursorSvgX = svgX;
+        const nearest = findNearestPointAt(time);
+        const tooltip = document.getElementById('wvCursorTooltip');
+        let html = `<strong>Time:</strong> ${hms(time)}`;
+        if (nearest.cadence != null) html += `<br/><strong>RPM:</strong> ${Math.round(nearest.cadence)} rpm`;
+        if (nearest.heart_rate != null) html += `<br/><strong>BPM:</strong> ${Math.round(nearest.heart_rate)} bpm`;
+        if (nearest.power != null) html += `<br/><strong>Watts:</strong> ${Math.round(nearest.power)} W`;
+        if (nearest.speed != null) html += `<br/><strong>Speed:</strong> ${fmtAxis(nearest.speed, 'speed')}`;
+        tooltip.innerHTML = html;
+        tooltip.classList.remove('hidden');
+        const box = chart.closest('.chart-box').getBoundingClientRect();
+        let tx = ev.clientX - box.left + 12;
+        let ty = ev.clientY - box.top - 12;
+        if (tx + 170 > box.width) tx -= 180;
+        if (ty < 2) ty = 2;
+        tooltip.style.left = `${tx}px`;
+        tooltip.style.top = `${ty}px`;
+      }
+
+      let dragStart = null;
+      chart.onmousedown = (ev) => {
+        if (ev.button !== 0) return;
+        ev.preventDefault();
+        document.body.classList.add('analyze-dragging');
+        const { time } = plotMouseToTime(ev);
+        dragStart = time;
+        analyzeState.selection = { start: time, end: time };
       };
-      finder.onmousemove = (ev) => {
-        if (!dragging) return;
-        const rect = finder.getBoundingClientRect();
-        const x = ((ev.clientX - rect.left) / rect.width) * 1200;
-        const b = finder.querySelector('#wvBrush');
-        const bw = Number(b.getAttribute('width'));
-        let bx = x - dragOffset;
-        bx = Math.max(0, Math.min(1200 - bw, bx));
-        b.setAttribute('x', String(bx));
-        analyzeState.wStart = (bx / 1200) * totalSec;
-        analyzeState.wEnd = ((bx + bw) / 1200) * totalSec;
+      chart.onmousemove = (ev) => {
+        updateCursor(ev);
+        if (dragStart !== null && (ev.buttons & 1) === 0) {
+          dragStart = null;
+          document.body.classList.remove('analyze-dragging');
+          return;
+        }
+        if (dragStart === null) return;
+        const { time } = plotMouseToTime(ev);
+        analyzeState.selection = { start: dragStart, end: time };
         renderMain();
       };
-      window.onmouseup = () => { dragging = false; };
+      chart.onmouseup = (ev) => {
+        if (dragStart === null) return;
+        const { time } = plotMouseToTime(ev);
+        analyzeState.selection = { start: dragStart, end: time };
+        if (Math.abs(time - dragStart) <= 1) analyzeState.selection = null;
+        dragStart = null;
+        document.body.classList.remove('analyze-dragging');
+        renderMain();
+      };
+      chart.onmouseleave = () => {
+        if (dragStart !== null) return;
+        hideCursorTooltip();
+        renderMain();
+      };
 
-      const lapBody = document.querySelector('#wvLapTable tbody');
-      lapBody.innerHTML = '';
+      zoomBtn.onclick = () => {
+        const isZoomed = analyzeState.wStart > 0 || analyzeState.wEnd < totalSec;
+        const canZoom = !!(analyzeState.selection && Math.abs(analyzeState.selection.end - analyzeState.selection.start) > 1);
+        if (isZoomed && !canZoom) {
+          analyzeState.zoomStack = [];
+          analyzeState.wStart = 0;
+          analyzeState.wEnd = totalSec;
+          analyzeState.selection = null;
+          renderMain();
+          return;
+        }
+        if (!analyzeState.selection) return;
+        const start = Math.min(analyzeState.selection.start, analyzeState.selection.end);
+        const end = Math.max(analyzeState.selection.start, analyzeState.selection.end);
+        if (Math.abs(end - start) <= 1) return;
+        analyzeState.zoomStack.push({ s: analyzeState.wStart, e: analyzeState.wEnd });
+        analyzeState.wStart = start;
+        analyzeState.wEnd = end;
+        analyzeState.selection = null;
+        renderMain();
+      };
+      cutBtn.onclick = () => {
+        if (!analyzeState.selection) return;
+        const start = Math.min(analyzeState.selection.start, analyzeState.selection.end);
+        const end = Math.max(analyzeState.selection.start, analyzeState.selection.end);
+        if (Math.abs(end - start) <= 1) return;
+        analyzeState.zoomStack.push({ s: analyzeState.wStart, e: analyzeState.wEnd });
+        analyzeState.wStart = start;
+        analyzeState.wEnd = end;
+        analyzeState.selection = null;
+        renderMain();
+      };
+      if (unzoomBtn) {
+        unzoomBtn.onclick = () => {
+          analyzeState.zoomStack = [];
+          analyzeState.wStart = 0;
+          analyzeState.wEnd = totalSec;
+          analyzeState.selection = null;
+          renderMain();
+        };
+      }
+      smoothingStep.oninput = () => {
+        analyzeState.smoothingStep = Number(smoothingStep.value || 2);
+        analyzeState.smoothedCache.clear();
+        renderMain();
+      };
+      smoothingStep.value = '2';
+
+      const toDisplay = (value, fn) => (value == null ? '' : fn(value));
       const lapRows = laps.length ? laps : [{
         name: 'Lap 1',
         start: series[0].timestamp,
         end: series[series.length - 1].timestamp,
         duration_s: totalSec,
       }];
+      lapBody.innerHTML = '';
       lapRows.forEach((lap, idx) => {
         const startSec = Math.max(0, timeToSec(lap.start || series[0].timestamp, baseMs));
-        const endSec = Math.max(startSec, lap.end ? timeToSec(lap.end, baseMs) : (startSec + Number(lap.duration_s || 0)));
+        const endSec = Math.max(startSec + 1, timeToSec(lap.end || series[series.length - 1].timestamp, baseMs));
+        const ifVal = Number(lap.if || lap.intensity_factor || 0) || null;
+        const dur = Number(lap.duration_s || (endSec - startSec) || 0);
+        const tss = Number(lap.tss || 0) || (ifVal ? ((dur / 3600) * ifVal * ifVal * 100) : null);
         const row = document.createElement('tr');
         row.innerHTML = `
-          <td><input type="checkbox" /></td>
-          <td>${lap.name || `Lap #${idx + 1}`}</td>
-          <td>${hms(Number(lap.duration_s || (endSec - startSec)))}</td>
-          <td>${lap.distance_m ? fmtDistanceMeters(lap.distance_m) : '--'}</td>
-          <td>${lap.avg_hr ? Math.round(lap.avg_hr) : '--'}</td>
-          <td>${lap.avg_power ? Math.round(lap.avg_power) : '--'}</td>
+          <td>${lap.name || `Lap ${idx + 1}`}</td>
+          <td>${fmtTimeShort(lap.start)}</td>
+          <td>${fmtTimeShort(lap.end)}</td>
+          <td>${toDisplay(dur, hms)}</td>
+          <td>${toDisplay(lap.moving_duration_s, hms)}</td>
+          <td>${toDisplay(lap.distance_m, fmtDistanceMeters)}</td>
+          <td>${tss == null ? '' : Math.round(tss)}</td>
+          <td>${ifVal == null ? '' : ifVal.toFixed(2)}</td>
+          <td>${lap.normalized_power || lap.np || ''}</td>
+          <td>${lap.avg_power == null ? '' : Math.round(lap.avg_power)}</td>
+          <td>${lap.max_power == null ? '' : Math.round(lap.max_power)}</td>
+          <td>${lap.avg_hr == null ? '' : Math.round(lap.avg_hr)}</td>
+          <td>${lap.max_hr == null ? '' : Math.round(lap.max_hr)}</td>
+          <td>${lap.avg_speed == null ? '' : fmtAxis(lap.avg_speed, 'speed')}</td>
+          <td>${lap.max_speed == null ? '' : fmtAxis(lap.max_speed, 'speed')}</td>
+          <td>${lap.avg_cadence == null ? '' : Math.round(lap.avg_cadence)}</td>
+          <td>${lap.work_kj == null ? '' : lap.work_kj}</td>
+          <td>${lap.calories == null ? '' : lap.calories}</td>
         `;
-        row.querySelector('input').addEventListener('change', (ev) => {
-          row.classList.toggle('selected', ev.target.checked);
-          const checked = Array.from(lapBody.querySelectorAll('input')).map((el, i) => ({ checked: el.checked, i })).filter(x => x.checked);
-          if (!checked.length) {
-            analyzeState.wStart = 0;
-            analyzeState.wEnd = totalSec;
-          } else {
-            const minI = Math.min(...checked.map(c => c.i));
-            const maxI = Math.max(...checked.map(c => c.i));
-            const minLap = lapRows[minI];
-            const maxLap = lapRows[maxI];
-            analyzeState.wStart = Math.max(0, timeToSec(minLap.start || series[0].timestamp, baseMs));
-            analyzeState.wEnd = Math.max(analyzeState.wStart + 1, timeToSec(maxLap.end || series[series.length - 1].timestamp, baseMs));
-          }
-          renderFinder();
+        row.addEventListener('click', () => {
+          lapBody.querySelectorAll('tr').forEach((tr) => tr.classList.remove('selected'));
+          row.classList.add('selected');
+          analyzeState.selection = { start: startSec, end: endSec };
           renderMain();
         });
         lapBody.appendChild(row);
@@ -1672,7 +2273,7 @@
       document.getElementById('wvPowerMin').value = summary.min_power ? String(Math.round(summary.min_power)) : '';
       document.getElementById('wvPowerAvg').value = summary.avg_power ? String(Math.round(summary.avg_power)) : '';
       document.getElementById('wvPowerMax').value = summary.max_power ? String(Math.round(summary.max_power)) : '';
-      renderFinder();
+      renderChannelList();
       renderMain();
     }
 
@@ -1779,29 +2380,19 @@
     }
 
     function renderCalendar(options = {}) {
-      const { forceAnchor = false, preserveScroll = true, targetDateKey = '' } = options;
+      const { preserveScroll = true, anchorDate = '', jumpToDate = '' } = options;
       const dayMap = buildDayAggregateMap();
       const plannedById = new Map(calendarItems.filter(i => i.kind === 'workout').map(i => [String(i.id), i]));
       const stravaById = new Map(activities.map(a => [String(a.id), a]));
       const pairByPlannedId = new Map(pairs.map(p => [String(p.planned_id), p]));
       const pairByStravaId = new Map(pairs.map(p => [String(p.strava_id), p]));
-      const wrap = document.getElementById('calendarScroll');
-      const prevScroll = preserveScroll ? wrap.scrollTop : 0;
-      const priorRows = preserveScroll ? Array.from(wrap.querySelectorAll('.week-row')) : [];
-      const wrapTop = wrap.getBoundingClientRect().top;
-      let priorTopWeek = null;
-      for (const row of priorRows) {
-        if (row.getBoundingClientRect().bottom >= wrapTop + 2) {
-          priorTopWeek = row;
-          break;
-        }
-      }
-      const preservedWeekStart = priorTopWeek ? String(priorTopWeek.dataset.weekStart || '') : '';
+      const wrap = getCalendarScrollContainer();
+      const restoreScrollTop = preserveScroll ? Number(calendarState.scrollTop || 0) : 0;
       wrap.innerHTML = '';
       const grid = document.createElement('section');
       grid.className = 'month';
 
-      const baseDate = targetDateKey ? parseDateKey(targetDateKey) : new Date(calendarCursor.getFullYear(), calendarCursor.getMonth(), 1);
+      const baseDate = parseDateKey(anchorDate || calendarState.anchorDate || todayKey());
       const startMonth = new Date(baseDate.getFullYear(), baseDate.getMonth() - 4, 1);
       const endMonth = new Date(baseDate.getFullYear(), baseDate.getMonth() + 9, 0);
       const startDate = new Date(startMonth);
@@ -1833,7 +2424,7 @@
           cell.className = 'day';
           cell.dataset.date = key;
           if (key === todayKey()) cell.classList.add('today');
-          if (dayDate.getMonth() !== calendarCursor.getMonth()) cell.style.opacity = '0.92';
+          if (dayDate.getMonth() !== baseDate.getMonth()) cell.style.opacity = '0.92';
 
           const num = document.createElement('span');
           num.className = 'd-num';
@@ -1993,45 +2584,29 @@
       }
 
       wrap.appendChild(grid);
+      bindCalendarScrollSync();
+      calendarState.hasRendered = true;
 
-      if (!calendarScrollBound) {
-        wrap.addEventListener('scroll', syncCalendarHeaderFromScroll);
-        calendarScrollBound = true;
+      if (jumpToDate) {
+        requestAnimationFrame(() => {
+          const target = wrap.querySelector(`.day[data-date="${jumpToDate}"]`);
+          if (target) {
+            wrap.scrollTop = target.offsetTop;
+          }
+          syncCalendarHeaderFromScroll();
+        });
+        return;
       }
-      const currentStartKey = dateKeyFromDate(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1));
-      let rowTarget = weekRows[0] || null;
-      weekRows.forEach((row) => {
-        if (String(row.dataset.weekStart || '') <= currentStartKey) rowTarget = row;
-      });
-      if (targetDateKey) {
-        const targetCell = wrap.querySelector(`.day[data-date="${targetDateKey}"]`);
-        const targetRow = targetCell ? targetCell.closest('.week-row') : null;
-        if (targetRow) rowTarget = targetRow;
-      }
-      if (!forceAnchor) {
-        const preferred = preservedWeekStart || calendarAnchorWeekStart;
-        if (preferred) {
-          const preferredRow = weekRows.find((row) => String(row.dataset.weekStart || '') === preferred);
-          if (preferredRow) rowTarget = preferredRow;
-        }
-      }
-      if (forceAnchor && rowTarget) {
-        wrap.scrollTop = rowTarget.offsetTop;
-        calendarAnchorWeekStart = String(rowTarget.dataset.weekStart || calendarAnchorWeekStart);
-      } else if (preserveScroll && prevScroll > 0) {
-        wrap.scrollTop = calendarScrollTop > 0 ? calendarScrollTop : prevScroll;
-      } else if (rowTarget) {
-        wrap.scrollTop = rowTarget.offsetTop;
-      }
+
+      wrap.scrollTop = restoreScrollTop;
       syncCalendarHeaderFromScroll();
     }
 
     function jumpToCurrentMonth() {
-      const now = new Date();
-      calendarCursor = new Date(now.getFullYear(), now.getMonth(), 1);
-      calendarAnchorWeekStart = dateKeyFromDate(mondayOfDate(now));
-      calendarScrollTop = 0;
-      renderCalendar({ forceAnchor: true, preserveScroll: false, targetDateKey: todayKey() });
+      const today = todayKey();
+      calendarState.anchorDate = today;
+      calendarState.scrollTop = 0;
+      renderCalendar({ preserveScroll: false, anchorDate: today, jumpToDate: today });
     }
 
     function renderDashboard() {
@@ -2057,6 +2632,13 @@
       setVal('ftpSwim', 'swim');
       setVal('ftpStrength', 'strength');
       setVal('ftpOther', 'other');
+      const system = (appSettings.unit_system === 'imperial'
+        || ((appSettings.units || {}).distance === 'mi' && (appSettings.units || {}).elevation === 'ft'))
+        ? 'imperial'
+        : 'metric';
+      document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.system === system);
+      });
     }
 
     function applyWidgetPrefs() {
@@ -2082,7 +2664,7 @@
       });
     }
 
-    async function loadData(resetMonthPosition) {
+    async function loadData() {
       try {
         const [aResp, cResp, pResp, sResp] = await Promise.all([fetch('/ui/activities'), fetch('/calendar-items'), fetch('/pairs'), fetch('/settings')]);
         activities = aResp.ok ? await aResp.json() : [];
@@ -2101,11 +2683,10 @@
         pairs = [];
       }
 
-      if (resetMonthPosition) initialMonthCentered = false;
       updateUnitButtons();
       renderHome();
       if (isCalendarActive()) {
-        renderCalendar({ forceAnchor: resetMonthPosition, preserveScroll: !resetMonthPosition });
+        renderCalendar({ preserveScroll: true, anchorDate: calendarState.anchorDate });
       }
       renderDashboard();
       renderSettings();
@@ -2120,10 +2701,13 @@
         const v = document.getElementById(id).value.trim();
         return v ? Number(v) : null;
       };
+      const activeSystemBtn = document.querySelector('#unitSystemToggle .seg-btn.active');
+      const unitSystem = activeSystemBtn ? activeSystemBtn.dataset.system : 'metric';
       const payload = {
+        unit_system: unitSystem,
         units: {
-          distance: (appSettings.units && appSettings.units.distance) || distanceUnit || 'km',
-          elevation: (appSettings.units && appSettings.units.elevation) || elevationUnit || 'm',
+          distance: unitSystem === 'imperial' ? 'mi' : 'km',
+          elevation: unitSystem === 'imperial' ? 'ft' : 'm',
         },
         ftp: {
           ride: read('ftpRide'),
@@ -2144,7 +2728,7 @@
       const msg = document.getElementById('settingsSavedMsg');
       msg.style.display = 'inline';
       setTimeout(() => { msg.style.display = 'none'; }, 1400);
-      await loadData(false);
+      await loadData();
     });
     document.getElementById('uploadFitBtn').addEventListener('click', () => {
       fitUploadContext = 'global';
@@ -2230,10 +2814,16 @@
       }
       fitUploadTargetActivityId = null;
       fitUploadContext = 'global';
-      await loadData(false);
+      await loadData();
     });
     document.getElementById('globalSettings').addEventListener('click', () => {
       document.getElementById('settingsModal').classList.add('open');
+    });
+    document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
     });
     document.getElementById('closeSettings').addEventListener('click', () => {
       document.getElementById('settingsModal').classList.remove('open');
@@ -2257,27 +2847,25 @@
       if (event.target.id === 'detailModal') closeDetailModal();
     });
 
-    document.getElementById('closeWorkoutView').addEventListener('click', async () => { await closeWorkoutModal(true); await loadData(false); });
-    document.getElementById('cancelWorkoutView').addEventListener('click', async () => { await closeWorkoutModal(true); await loadData(false); });
+    document.getElementById('closeWorkoutView').addEventListener('click', async () => { await closeWorkoutModal(true); await loadData(); });
+    document.getElementById('cancelWorkoutView').addEventListener('click', async () => { await closeWorkoutModal(true); await loadData(); });
     document.getElementById('saveWorkoutView').addEventListener('click', () => saveWorkoutView(false));
     document.getElementById('saveCloseWorkoutView').addEventListener('click', () => saveWorkoutView(true));
-    document.getElementById('deleteWorkoutView').addEventListener('click', async () => {
+    document.getElementById('deleteWorkoutView').addEventListener('click', () => {
       const payload = window.currentWorkoutPayload;
       if (!payload) return;
-      if (!window.confirm('Are you sure you want to delete this?')) return;
-      const data = payload.data || {};
-      if (payload.planned || payload.source === 'planned') {
-        const targetId = payload.planned ? payload.planned.id : data.id;
-        if (!targetId) {
-          await closeWorkoutModal(false);
-          return;
+      confirmDelete({ onConfirm: async () => {
+        const data = payload.data || {};
+        if (payload.planned || payload.source === 'planned') {
+          const targetId = payload.planned ? payload.planned.id : data.id;
+          if (!targetId) { await closeWorkoutModal(false); return; }
+          await fetch(`/calendar-items/${targetId}`, { method: 'DELETE' });
+        } else if (payload.source === 'strava') {
+          await fetch(`/activities/${data.id}`, { method: 'DELETE' });
         }
-        await fetch(`/calendar-items/${targetId}`, { method: 'DELETE' });
-      } else if (payload.source === 'strava') {
-        await fetch(`/activities/${data.id}`, { method: 'DELETE' });
-      }
-      await closeWorkoutModal(false);
-      await loadData(false);
+        await closeWorkoutModal(false);
+        await loadData();
+      } });
     });
     document.getElementById('wvBrowseFilesBtn').addEventListener('click', () => {
       const payload = window.currentWorkoutPayload;
@@ -2308,6 +2896,8 @@
       btn.addEventListener('click', () => {
         if (btn.disabled) return;
         setFeelValue(btn.dataset.feel);
+        const rpeVal = Number(document.getElementById('wvRpe').value || 0);
+        renderTopFeelRpe(btn.dataset.feel, (modalDraft && modalDraft.rpeTouched) ? rpeVal : 0);
       });
     });
     document.getElementById('wvRpe').addEventListener('input', () => {
@@ -2315,6 +2905,7 @@
       const rpe = document.getElementById('wvRpe');
       rpe.classList.remove('rpe-unset');
       updateRpeLabel();
+      renderTopFeelRpe(currentFeel, Number(rpe.value || 0));
     });
     document.getElementById('wvPostCommentBtn').addEventListener('click', () => {
       const input = document.getElementById('wvCommentInput');
@@ -2372,7 +2963,7 @@
     });
     document.getElementById('workoutViewModal').addEventListener('click', (event) => {
       if (event.target.id === 'workoutViewModal') {
-        closeWorkoutModal(true).then(() => loadData(false));
+        closeWorkoutModal(true).then(() => loadData());
       }
     });
     document.getElementById('contextMenu').addEventListener('click', (ev) => ev.stopPropagation());
@@ -2387,9 +2978,37 @@
     });
     document.getElementById('calTodayBtn').addEventListener('click', jumpToCurrentMonth);
 
+    // ── Delete confirm modal wiring ──
+    document.getElementById('deleteConfirmCancel').addEventListener('click', async () => {
+      document.getElementById('deleteConfirmModal').classList.remove('open');
+      if (_deleteConfirmResolver) {
+        const resolver = _deleteConfirmResolver;
+        _deleteConfirmResolver = null;
+        await resolver(false);
+      }
+    });
+    document.getElementById('deleteConfirmOk').addEventListener('click', async () => {
+      document.getElementById('deleteConfirmModal').classList.remove('open');
+      if (_deleteConfirmResolver) {
+        const resolver = _deleteConfirmResolver;
+        _deleteConfirmResolver = null;
+        await resolver(true);
+      }
+    });
+    document.getElementById('deleteConfirmModal').addEventListener('click', async (ev) => {
+      if (ev.target.id === 'deleteConfirmModal') {
+        document.getElementById('deleteConfirmModal').classList.remove('open');
+        if (_deleteConfirmResolver) {
+          const resolver = _deleteConfirmResolver;
+          _deleteConfirmResolver = null;
+          await resolver(false);
+        }
+      }
+    });
+
     buildTypeGrids();
     bindWidgetToggles();
     applyWidgetPrefs();
     updateUnitButtons();
     setView('home');
-    loadData(true);
+    loadData();

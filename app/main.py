@@ -219,7 +219,11 @@ def apply_parsed_fit_to_activity(item: dict[str, Any], parsed: dict[str, Any], f
     sport = str(summary.get("sport") or item.get("type") or "Ride").title()
     item["type"] = sport
     item["if_value"] = summary.get("if")
+    item["np_value"] = summary.get("normalized_power")
     item["tss_override"] = summary.get("tss")
+    item["work_kj"] = summary.get("work_kj")
+    item["calories"] = summary.get("calories")
+    item["avg_speed"] = summary.get("avg_speed")
     item["avg_power"] = summary.get("avg_power")
     item["avg_hr"] = summary.get("avg_hr")
     item["min_hr"] = summary.get("min_hr")
@@ -232,6 +236,7 @@ def apply_parsed_fit_to_activity(item: dict[str, Any], parsed: dict[str, Any], f
 
 def default_settings() -> dict[str, Any]:
     return {
+        "unit_system": "metric",
         "units": {"distance": "km", "elevation": "m"},
         "ftp": {
             "ride": None,
@@ -263,6 +268,9 @@ def load_settings() -> dict[str, Any]:
     raw = read_json_file(SETTINGS_FILE, {})
     settings = default_settings()
     if isinstance(raw, dict):
+        unit_system = str(raw.get("unit_system", "")).strip().lower()
+        if unit_system in {"metric", "imperial"}:
+            settings["unit_system"] = unit_system
         units = raw.get("units", {})
         if isinstance(units, dict):
             if units.get("distance") in {"km", "mi", "m"}:
@@ -278,6 +286,9 @@ def load_settings() -> dict[str, Any]:
 
 def save_settings(settings: dict[str, Any]) -> dict[str, Any]:
     merged = default_settings()
+    unit_system = str(settings.get("unit_system", "")).strip().lower()
+    if unit_system in {"metric", "imperial"}:
+        merged["unit_system"] = unit_system
     units = settings.get("units", {})
     if isinstance(units, dict):
         if units.get("distance") in {"km", "mi", "m"}:
@@ -337,6 +348,37 @@ def _max(values: list[float]) -> float | None:
     return max(values)
 
 
+def _normalized_power(points: list[dict[str, Any]]) -> float | None:
+    samples: list[tuple[float, float]] = []
+    for row in points:
+        p = _as_float(row.get("power"))
+        ts = row.get("timestamp")
+        if p is None or p <= 0 or not isinstance(ts, str):
+            continue
+        try:
+            t = datetime.fromisoformat(ts).timestamp()
+        except ValueError:
+            continue
+        samples.append((t, p))
+    if not samples:
+        return None
+    window: list[tuple[float, float]] = []
+    rolling_avgs: list[float] = []
+    sum_power = 0.0
+    for t, p in samples:
+        window.append((t, p))
+        sum_power += p
+        while window and (t - window[0][0]) > 30.0:
+            sum_power -= window[0][1]
+            window.pop(0)
+        if window:
+            rolling_avgs.append(sum_power / len(window))
+    if not rolling_avgs:
+        return None
+    mean_p4 = sum(v ** 4 for v in rolling_avgs) / len(rolling_avgs)
+    return mean_p4 ** 0.25
+
+
 def parse_fit_file_to_json(path: Path, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     with path.open("rb") as handle:
         return parse_fit_stream_to_json(handle, settings=settings)
@@ -393,8 +435,12 @@ def parse_fit_stream_to_json(stream: Any, settings: dict[str, Any] | None = None
                     "max_speed": _as_float(vals.get("max_speed")),
                     "avg_power": _as_float(vals.get("avg_power")),
                     "max_power": _as_float(vals.get("max_power")),
+                    "normalized_power": _as_float(vals.get("normalized_power")),
                     "avg_cadence": _as_float(vals.get("avg_cadence")),
                     "max_cadence": _as_float(vals.get("max_cadence")),
+                    "moving_duration_s": _as_float(vals.get("total_timer_time")),
+                    "work_kj": (_as_float(vals.get("total_work")) / 1000.0) if _as_float(vals.get("total_work")) else None,
+                    "calories": _as_float(vals.get("total_calories")),
                 }
             )
         elif name == "session":
@@ -457,15 +503,13 @@ def parse_fit_stream_to_json(stream: Any, settings: dict[str, Any] | None = None
     ftp_value = None
     if settings:
         ftp_value = sanitize_ftp_value((settings.get("ftp") or {}).get(ftp_key))
+    np_value = _normalized_power(points)
     if_value = None
-    if ftp_value and (_as_float(session_values.get("avg_power")) or _mean(power_values)):
-        avg_p = _as_float(session_values.get("avg_power")) or _mean(power_values) or 0
-        if avg_p > 0:
-            if_value = avg_p / ftp_value
+    if ftp_value and np_value and np_value > 0:
+        if_value = np_value / ftp_value
     tss_value = None
-    if if_value and duration_s > 0:
-        hours = duration_s / 3600.0
-        tss_value = hours * if_value * if_value * 100.0
+    if if_value and np_value and ftp_value and duration_s > 0:
+        tss_value = (duration_s * np_value * if_value) / (ftp_value * 3600.0) * 100.0
 
     return {
         "summary": {
@@ -482,11 +526,14 @@ def parse_fit_stream_to_json(stream: Any, settings: dict[str, Any] | None = None
             "avg_cadence": _as_float(session_values.get("avg_cadence")) or _mean(cadence_values),
             "max_cadence": _as_float(session_values.get("max_cadence")) or _max(cadence_values),
             "elev_gain_m": _as_float(session_values.get("total_ascent")),
+            "work_kj": (_as_float(session_values.get("total_work")) / 1000.0) if _as_float(session_values.get("total_work")) else None,
+            "calories": _as_float(session_values.get("total_calories")),
             "sport": sport,
             "sport_key": ftp_key,
             "ftp": ftp_value,
             "if": if_value,
             "tss": tss_value,
+            "normalized_power": np_value,
         },
         "series": points,
         "laps": laps,
@@ -563,8 +610,21 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
             completed_elevation_m = float(payload.get("completed_elevation_m", 0) or 0)
             completed_tss = float(payload.get("completed_tss", 0) or 0)
             completed_if = float(payload.get("completed_if", 0) or 0)
+            completed_np = float(payload.get("completed_np", 0) or 0)
+            completed_work_kj = float(payload.get("completed_work_kj", 0) or 0)
+            completed_calories = float(payload.get("completed_calories", 0) or 0)
+            completed_avg_speed = float(payload.get("completed_avg_speed", 0) or 0)
+            completed_hr_min = float(payload.get("completed_hr_min", 0) or 0)
+            completed_hr_avg = float(payload.get("completed_hr_avg", 0) or 0)
+            completed_hr_max = float(payload.get("completed_hr_max", 0) or 0)
+            completed_power_min = float(payload.get("completed_power_min", 0) or 0)
+            completed_power_avg = float(payload.get("completed_power_avg", 0) or 0)
+            completed_power_max = float(payload.get("completed_power_max", 0) or 0)
             planned_if = float(payload.get("planned_if", 0) or 0)
             planned_tss = float(payload.get("planned_tss", 0) or 0)
+            planned_avg_speed = float(payload.get("planned_avg_speed", 0) or 0)
+            planned_calories = float(payload.get("planned_calories", 0) or 0)
+            planned_work_kj = float(payload.get("planned_work_kj", 0) or 0)
         except (TypeError, ValueError) as err:
             raise HTTPException(status_code=400, detail="Workout values must be numeric.") from err
 
@@ -584,8 +644,21 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
         item["completed_elevation_m"] = max(0.0, completed_elevation_m)
         item["completed_tss"] = max(0.0, completed_tss)
         item["completed_if"] = max(0.0, completed_if)
+        item["completed_np"] = max(0.0, completed_np)
+        item["completed_work_kj"] = max(0.0, completed_work_kj)
+        item["completed_calories"] = max(0.0, completed_calories)
+        item["completed_avg_speed"] = max(0.0, completed_avg_speed)
+        item["completed_hr_min"] = max(0.0, completed_hr_min)
+        item["completed_hr_avg"] = max(0.0, completed_hr_avg)
+        item["completed_hr_max"] = max(0.0, completed_hr_max)
+        item["completed_power_min"] = max(0.0, completed_power_min)
+        item["completed_power_avg"] = max(0.0, completed_power_avg)
+        item["completed_power_max"] = max(0.0, completed_power_max)
         item["planned_if"] = max(0.0, planned_if)
         item["planned_tss"] = max(0.0, planned_tss)
+        item["planned_avg_speed"] = max(0.0, planned_avg_speed)
+        item["planned_calories"] = max(0.0, planned_calories)
+        item["planned_work_kj"] = max(0.0, planned_work_kj)
         item["comments"] = str(payload.get("comments", "")).strip()
         raw_feed = payload.get("comments_feed", [])
         if isinstance(raw_feed, list):
