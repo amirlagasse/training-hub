@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260225d" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260225h" />
 </head>
 <body>
   <header class="top-nav">
@@ -559,7 +559,9 @@
                         <span class="analyze-smoothing-tooltip">Smoothing</span>
                       </div>
                     </div>
-                    <div id="wvAnalyzeChannelsTop" class="analyze-channels analyze-channels-top"></div>
+                    <div class="analyze-toolbar-right">
+                      <div id="wvAnalyzeChannelsTop" class="analyze-channels analyze-channels-top"></div>
+                    </div>
                   </div>
                   <div id="wvCursorTooltip" class="analyze-tooltip hidden"></div>
                   <svg id="wvChart" viewBox="0 0 1200 220" width="100%" height="220" role="img" aria-label="Workout analysis chart" style="cursor:crosshair;display:block;"></svg>
@@ -590,9 +592,18 @@
                   <tbody></tbody>
                 </table>
               </div>
-              <div class="wv-card wv-selection-card">
-                <h3 id="wvSelectionTitle" style="margin:0 0 4px;">Entire Workout</h3>
-                <div class="wv-kv" id="wvSelectionKv"></div>
+              <div class="wv-analyze-side">
+                <div id="wvAnalyzeApplyHost">
+                  <div id="wvAnalyzeApplyBar" class="analyze-apply-bar hidden">
+                    <span>Apply changes</span>
+                    <button id="wvApplyAnalyzeBtn" class="btn secondary analyze-mini-btn" type="button">Apply</button>
+                    <button id="wvCancelAnalyzeBtn" class="btn ghost analyze-mini-btn" type="button">Cancel</button>
+                  </div>
+                </div>
+                <div class="wv-card wv-selection-card">
+                  <h3 id="wvSelectionTitle" style="margin:0 0 4px;">Entire Workout</h3>
+                  <div class="wv-kv" id="wvSelectionKv"></div>
+                </div>
               </div>
             </div>
           </section>
@@ -619,6 +630,18 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js?v=20260225d"></script>
+  <!-- Apply changes confirmation modal -->
+  <div id="applyConfirmModal" class="modal" style="z-index:111;">
+    <div class="delete-confirm-card">
+      <h3 class="delete-confirm-title">Apply changes?</h3>
+      <p class="delete-confirm-sub">Cuts will be committed to this workout view.</p>
+      <div class="delete-confirm-btns">
+        <button class="delete-cancel-btn" id="applyConfirmCancel">Cancel</button>
+        <button class="delete-action-btn" id="applyConfirmOk">Apply</button>
+      </div>
+    </div>
+  </div>
+
+    <script src="/static/js/app.js?v=20260225h"></script>
 </body>
 </html>

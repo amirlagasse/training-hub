@@ -676,6 +676,20 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
             rpe_val = 0
         item["feel"] = max(0, min(5, feel_val))
         item["rpe"] = max(0, min(10, rpe_val))
+        raw_analysis = payload.get("analysis_edits", {})
+        if isinstance(raw_analysis, dict):
+            deleted = raw_analysis.get("deletedChannels", [])
+            cuts = raw_analysis.get("cuts", [])
+            item["analysis_edits"] = {
+                "deletedChannels": [str(x) for x in deleted if isinstance(x, str)],
+                "cuts": [
+                    {"startSec": max(0.0, float(c.get("startSec", 0) or 0)), "endSec": max(0.0, float(c.get("endSec", 0) or 0))}
+                    for c in cuts
+                    if isinstance(c, dict)
+                ],
+            }
+        else:
+            item["analysis_edits"] = {"deletedChannels": [], "cuts": []}
 
     if kind == "event":
         item["event_type"] = str(payload.get("event_type", "Race")).strip() or "Race"
@@ -797,7 +811,7 @@ def ui_activities() -> list[dict[str, Any]]:
             updated["name"] = str(override["title"])
         if "type" in override:
             updated["type"] = str(override["type"])
-        for k in ["description", "comments", "comments_feed", "feel", "rpe", "tss_override", "if_value"]:
+        for k in ["description", "comments", "comments_feed", "feel", "rpe", "tss_override", "if_value", "analysis_edits"]:
             if k in override:
                 updated[k] = override[k]
         if override.get("hidden"):
@@ -1047,6 +1061,19 @@ def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) 
         current["if_value"] = _as_float(payload.get("if_value"))
     if "tss_override" in payload:
         current["tss_override"] = _as_float(payload.get("tss_override"))
+    if "analysis_edits" in payload:
+        raw_analysis = payload.get("analysis_edits")
+        if isinstance(raw_analysis, dict):
+            deleted = raw_analysis.get("deletedChannels", [])
+            cuts = raw_analysis.get("cuts", [])
+            current["analysis_edits"] = {
+                "deletedChannels": [str(x) for x in deleted if isinstance(x, str)],
+                "cuts": [
+                    {"startSec": max(0.0, float(c.get("startSec", 0) or 0)), "endSec": max(0.0, float(c.get("endSec", 0) or 0))}
+                    for c in cuts
+                    if isinstance(c, dict)
+                ],
+            }
     overrides[activity_id] = current
     save_activity_overrides(overrides)
     return {"ok": True}

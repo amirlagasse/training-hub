@@ -825,8 +825,9 @@
       font-weight: 700;
     }
     .wv-row1 .mini-chip {
-      font-size: 11px;
-      padding: 4px 8px;
+      font-size: 9px;
+      padding: 2px 6px;
+      white-space: nowrap;
     }
 
     .mini-chip.ctl { background: var(--blue); }
@@ -934,10 +935,10 @@
 
     .wv-top {
       display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 10px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px;
       align-items: start;
-      padding: 12px 14px;
+      padding: 12px 10px 12px 4px;
       border-bottom: 1px solid #e3ebf4;
       background: #f8fbff;
       position: relative;
@@ -946,36 +947,39 @@
     .wv-head-main {
       display: grid;
       gap: 6px;
+      margin-right: 2px;
+      min-width: 0;
     }
 
     .wv-row1 {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       flex-wrap: wrap;
     }
 
     .wv-row2 {
       display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 8px;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 6px;
       align-items: start;
     }
 
     .wv-date-line {
       color: #1f5bd7;
-      font-size: 16px;
+      font-size: 12px;
       font-weight: 700;
       letter-spacing: 0.2px;
       text-transform: uppercase;
       margin-right: 8px;
+      white-space: nowrap;
     }
 
     .wv-time-select {
       border: 1px solid #c9d7e9;
       border-radius: 8px;
-      padding: 6px 8px;
-      font-size: 14px;
+      padding: 4px 7px;
+      font-size: 11px;
       color: #2c4f79;
       background: #fff;
       font-family: inherit;
@@ -1029,7 +1033,7 @@
       font-size: 15px;
       font-weight: 700;
       color: #1f2f43;
-      min-width: 260px;
+      min-width: 220px;
       flex: 1;
       font-family: inherit;
     }
@@ -1050,6 +1054,7 @@
       display: grid;
       gap: 6px;
       min-width: 0;
+      margin-left: -2px;
     }
 
     .wv-sport-select {
@@ -1077,23 +1082,24 @@
     }
     .wv-top-feel-rpe {
       color: #35597f;
-      font-size: 13px;
+      font-size: 11px;
       font-weight: 700;
     }
 
     .wv-tabs {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 4px;
       align-items: stretch;
-      min-width: 94px;
+      min-width: 78px;
+      margin-right: 4px;
     }
 
     .wv-head-status {
       display: flex;
       align-items: center;
-      justify-content: flex-end;
-      gap: 5px;
+      justify-content: flex-start;
+      gap: 4px;
       font-size: 12px;
       color: #1e2f46;
       font-weight: 700;
@@ -1116,10 +1122,17 @@
       border: 1px solid #c9d7e9;
       background: #1f5bd7;
       border-radius: 8px;
-      padding: 6px 10px;
+      padding: 4px 8px;
       color: #fff;
       font-weight: 700;
+      font-size: 11px;
       cursor: pointer;
+    }
+
+    #closeWorkoutView {
+      position: static;
+      align-self: flex-end;
+      margin-bottom: 1px;
     }
 
     .wv-tab.active { box-shadow: 0 0 0 2px rgba(31, 91, 215, 0.2) inset; }
@@ -1282,7 +1295,7 @@
     .workout-view-modal:not(.analyze-mode) #wvSummary .tp-unit,
     .workout-view-modal:not(.analyze-mode) #wvSummary .tp-equipment-title,
     .workout-view-modal:not(.analyze-mode) #wvSummary .tp-right-block .field label {
-      font-size: 50%;
+      font-size: 10px;
     }
 
     .workout-view-modal:not(.analyze-mode) #wvSummary .tp-in,
@@ -1291,6 +1304,24 @@
       height: 19px;
       padding: 1px 4px;
       font-size: 10px;
+    }
+
+    .workout-view-modal:not(.analyze-mode) #wvSummary .tp-unit-select {
+      width: 50%;
+      min-width: 44px;
+    }
+
+    .workout-view-modal:not(.analyze-mode) #wvSummary .tp-table-head,
+    .workout-view-modal:not(.analyze-mode) #wvSummary .tp-minmax-head,
+    .workout-view-modal:not(.analyze-mode) #wvSummary .tp-right-block .field label,
+    .workout-view-modal:not(.analyze-mode) #wvSummary .tp-equipment-title {
+      color: #1f2f43;
+      font-weight: 700;
+    }
+
+    .workout-view-modal:not(.analyze-mode) #wvSummary .tp-eq-row label {
+      color: #24364c;
+      font-weight: 500;
     }
 
     .workout-view-modal:not(.analyze-mode) #wvSummary .tp-row,
@@ -1313,6 +1344,13 @@
       display: grid;
       grid-template-columns: minmax(0, 1fr) 240px;
       gap: 12px;
+      align-items: start;
+    }
+
+    .wv-analyze-side {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
       align-items: start;
     }
 
@@ -1482,6 +1520,7 @@
       border-radius: 8px;
       padding: 8px 10px;
       font-family: inherit;
+      font-size: 10px;
     }
 
     .pc-table {
@@ -1531,10 +1570,17 @@
       min-width: 0;
     }
 
+    .analyze-toolbar-right {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
     .analyze-mini-btn {
-      min-height: 22px;
-      padding: 2px 7px;
-      font-size: 11px;
+      min-height: 16px;
+      padding: 1px 5px;
+      font-size: 8px;
       line-height: 1.1;
     }
 
@@ -1626,6 +1672,14 @@
 
     .lap-table tr.selected {
       background: #e6f0ff;
+    }
+
+    .lap-table tbody tr:nth-child(odd) {
+      background: #ffffff;
+    }
+
+    .lap-table tbody tr:nth-child(even) {
+      background: #f7f9fc;
     }
 
     .analyze-channel-item.active .channel-name {
@@ -1841,7 +1895,7 @@
       flex-wrap: wrap;
       margin-bottom: 8px;
       align-items: center;
-      font-size: 11px;
+      font-size: 8px;
     }
 
     .analyze-channel-item {
@@ -1851,13 +1905,32 @@
       border: 1px solid #cdd8e6;
       border-right-width: 0;
       border-radius: 0;
-      min-height: 22px;
-      padding: 0 8px;
+      min-height: 16px;
+      padding: 0 6px;
       cursor: pointer;
       background: #e0e6ef;
       color: #566a82;
       font-weight: 700;
-      letter-spacing: 0.2px;
+      letter-spacing: 0.1px;
+      font-size: 8px;
+    }
+
+    .analyze-apply-bar {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border: 1px solid #d2dfef;
+      border-radius: 8px;
+      background: #fff;
+      padding: 3px 6px;
+      font-size: 10px;
+      color: #2b425d;
+      box-shadow: 0 6px 14px rgba(12,26,42,0.12);
+    }
+
+    #wvAnalyzeApplyHost {
+      min-height: 0;
+      margin-bottom: 6px;
     }
 
     .analyze-channel-item:first-child {
