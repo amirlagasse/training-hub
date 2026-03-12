@@ -5,6 +5,10 @@
       --text: #172333;
       --muted: #6b7e93;
       --nav: #102947;
+      --top-nav-blue-old: linear-gradient(180deg, #113154 0%, #0e2843 100%);
+      --top-nav-purple-test: linear-gradient(180deg, #6a4fd0 0%, #4f38a6 100%);
+      --top-nav-orange-test: linear-gradient(180deg, #d87722 0%, #bf6416 100%);
+      --top-nav-green-test: linear-gradient(180deg, #2f8a3c 0%, #256f30 100%);
       --blue: #1e58d1;
       --pink: #ed4e95;
       --orange: #f06b23;
@@ -28,7 +32,8 @@
       position: sticky;
       top: 0;
       z-index: 20;
-      background: linear-gradient(180deg, #113154 0%, #0e2843 100%);
+      /* background: var(--top-nav-blue-old); */
+      background: var(--top-nav-purple-test);
       border-bottom: 1px solid rgba(255,255,255,0.12);
       min-height: 45px;
       display: grid;
@@ -563,12 +568,13 @@
 
     .work-card .wc-metrics {
       display: flex;
-      align-items: center;
-      gap: 8px;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
       margin: 0 0 2px;
       color: #5f758e;
       font-size: 11px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
     }
 
     .work-card .wc-bottom {
@@ -823,6 +829,7 @@
       font-size: 14px;
       padding: 6px 10px;
       font-weight: 700;
+      white-space: nowrap;
     }
     .wv-row1 .mini-chip {
       font-size: 9px;
@@ -936,26 +943,32 @@
     .wv-top {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 6px;
+      gap: 8px;
       align-items: start;
-      padding: 12px 10px 12px 4px;
+      padding: 8px 10px 12px 6px;
       border-bottom: 1px solid #e3ebf4;
       background: #f8fbff;
       position: relative;
     }
 
+    .wv-top.status-green { background: #f2f8ef; }
+    .wv-top.status-yellow { background: #fffde8; }
+    .wv-top.status-red { background: #fff2f2; }
+    .wv-top.status-gray { background: #f5f7fa; }
+
     .wv-head-main {
       display: grid;
       gap: 6px;
-      margin-right: 2px;
+      margin-right: 120px;
       min-width: 0;
     }
 
     .wv-row1 {
       display: flex;
       align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
+      gap: 4px;
+      flex-wrap: nowrap;
+      margin-top: -2px;
     }
 
     .wv-row2 {
@@ -971,7 +984,7 @@
       font-weight: 700;
       letter-spacing: 0.2px;
       text-transform: uppercase;
-      margin-right: 8px;
+      margin-right: 5px;
       white-space: nowrap;
     }
 
@@ -1087,18 +1100,31 @@
     }
 
     .wv-tabs {
+      position: absolute;
+      top: 34px;
+      right: 10px;
       display: flex;
       flex-direction: column;
+      gap: 3px;
+      align-items: flex-end;
+      min-width: 96px;
+    }
+
+    .wv-tab-stack {
+      display: grid;
       gap: 4px;
-      align-items: stretch;
-      min-width: 78px;
-      margin-right: 4px;
+      justify-items: end;
+    }
+
+    .wv-tab-stack .wv-tab {
+      width: 74px;
+      text-align: center;
     }
 
     .wv-head-status {
       display: flex;
       align-items: center;
-      justify-content: flex-start;
+      justify-content: flex-end;
       gap: 4px;
       font-size: 12px;
       color: #1e2f46;
@@ -1130,9 +1156,12 @@
     }
 
     #closeWorkoutView {
-      position: static;
-      align-self: flex-end;
-      margin-bottom: 1px;
+      position: absolute;
+      top: -30px;
+      right: 0px;
+      font-size: 24px;
+      padding: 1px 4px;
+      z-index: 5;
     }
 
     .wv-tab.active { box-shadow: 0 0 0 2px rgba(31, 91, 215, 0.2) inset; }
@@ -1267,8 +1296,8 @@
 
     /* Summary mode: compact width */
     .workout-view-modal .modal-card {
-      width: min(560px, 100%) !important;
-      max-height: 95vh;
+      width: min(620px, 100%) !important;
+      max-height: 97vh;
       overflow: hidden;
     }
 
@@ -1316,6 +1345,12 @@
     .workout-view-modal:not(.analyze-mode) #wvSummary .tp-right-block .field label,
     .workout-view-modal:not(.analyze-mode) #wvSummary .tp-equipment-title {
       color: #1f2f43;
+      font-weight: 700;
+    }
+
+    .workout-view-modal:not(.analyze-mode) #wvSummary .tp-table-head,
+    .workout-view-modal:not(.analyze-mode) #wvSummary .tp-minmax-head {
+      font-size: 10px;
       font-weight: 700;
     }
 
@@ -1452,8 +1487,8 @@
 
     .wv-files-popover {
       position: absolute;
-      right: 58px;
-      top: 44px;
+      right: 8px;
+      top: 72px;
       width: 360px;
       z-index: 40;
     }
@@ -1511,16 +1546,27 @@
       margin-top: 8px;
       display: flex;
       gap: 8px;
-      align-items: center;
+      align-items: flex-end;
     }
 
     .comment-input-row input {
       flex: 1;
       border: 1px solid #cddaea;
       border-radius: 8px;
-      padding: 8px 10px;
+      padding: 4px 8px;
       font-family: inherit;
       font-size: 10px;
+      min-height: 26px;
+    }
+
+    .comment-input-row input::placeholder {
+      font-size: 10px;
+    }
+
+    #wvPostCommentBtn {
+      font-size: 10px;
+      padding: 6px 10px;
+      margin-top: 2px;
     }
 
     .pc-table {
@@ -1674,6 +1720,18 @@
       background: #e6f0ff;
     }
 
+    .lap-check-col {
+      width: 26px;
+      min-width: 26px;
+      text-align: center !important;
+    }
+
+    .lap-select {
+      width: 14px;
+      height: 14px;
+      vertical-align: middle;
+    }
+
     .lap-table tbody tr:nth-child(odd) {
       background: #ffffff;
     }
@@ -1751,7 +1809,8 @@
       gap: 6px;
       margin-bottom: 6px;
       color: #28384d;
-      font-size: 18px;
+      font-size: 13px;
+      font-weight: 700;
     }
 
     .tp-row {
@@ -1812,6 +1871,7 @@
       margin: 14px 0 6px;
       color: #25364b;
       font-size: 13px;
+      font-weight: 700;
       text-align: center;
     }
 
@@ -1837,6 +1897,18 @@
       color: #24364c;
     }
 
+    .tp-right-block .wv-rpe-field {
+      margin-top: 2px;
+    }
+
+    .tp-right-block .wv-rpe-field label {
+      margin-bottom: 2px;
+    }
+
+    .tp-right-block .wv-comments-field label {
+      margin-bottom: 2px;
+    }
+
     .tp-right-block .field textarea,
     .tp-right-block .field input {
       border-radius: 6px;
@@ -1845,7 +1917,8 @@
     }
 
     .tp-equipment-title {
-      font-size: 18px;
+      font-size: 13px;
+      font-weight: 700;
       color: #24364c;
       text-align: center;
       margin: 14px 0 8px;
@@ -1861,7 +1934,8 @@
 
     .tp-eq-row label {
       text-align: right;
-      font-size: 14px;
+      font-size: 13px;
+      font-weight: 700;
       color: #24364c;
     }
 
@@ -1916,7 +1990,7 @@
     }
 
     .analyze-apply-bar {
-      display: inline-flex;
+      display: flex;
       align-items: center;
       gap: 5px;
       border: 1px solid #d2dfef;
@@ -1926,11 +2000,14 @@
       font-size: 10px;
       color: #2b425d;
       box-shadow: 0 6px 14px rgba(12,26,42,0.12);
+      width: 100%;
+      justify-content: flex-start;
     }
 
     #wvAnalyzeApplyHost {
       min-height: 0;
       margin-bottom: 6px;
+      width: 100%;
     }
 
     .analyze-channel-item:first-child {

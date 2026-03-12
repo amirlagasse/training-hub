@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260225h" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260312a" />
 </head>
 <body>
   <header class="top-nav">
@@ -393,8 +393,10 @@
           </div>
           <div class="wv-tabs">
             <button class="icon-btn" id="closeWorkoutView">&times;</button>
-            <button class="wv-tab files" id="wvFilesTabBtn">Files</button>
-            <button class="wv-tab analyze" id="wvAnalyzeBtn">Analyze</button>
+            <div class="wv-tab-stack">
+              <button class="wv-tab files" id="wvFilesTabBtn">Files</button>
+              <button class="wv-tab analyze" id="wvAnalyzeBtn">Analyze</button>
+            </div>
             <div class="wv-head-status">
               <span id="wvTopFeelRpe" class="wv-top-feel-rpe hidden"></span>
               <span id="wvHeadStatusSep" class="wv-head-status-sep hidden">|</span>
@@ -528,11 +530,11 @@
                         <button class="feel-btn" type="button" data-feel="5" title="Very Strong">😁</button>
                       </div>
                     </div>
-                    <div class="field">
+                    <div class="field wv-rpe-field">
                       <label>Rating of Perceived Exertion (RPE): <span id="wvRpeVal"></span></label>
                       <input id="wvRpe" class="rpe-slider rpe-unset" type="range" min="1" max="10" step="1" value="1" />
                     </div>
-                    <div class="field">
+                    <div class="field wv-comments-field">
                       <label>Post-activity comments</label>
                       <div id="wvCommentsFeed" class="comment-feed"></div>
                       <div class="comment-input-row">
@@ -569,6 +571,7 @@
                 <table class="lap-table" id="wvLapTable">
                   <thead>
                     <tr>
+                      <th class="lap-check-col"></th>
                       <th>Lap</th>
                       <th>Start</th>
                       <th>End</th>
@@ -593,9 +596,9 @@
                 </table>
               </div>
               <div class="wv-analyze-side">
-                <div id="wvAnalyzeApplyHost">
-                  <div id="wvAnalyzeApplyBar" class="analyze-apply-bar hidden">
-                    <span>Apply changes</span>
+                <div id="wvAnalyzeApplyHost" class="hidden">
+                  <div id="wvAnalyzeApplyBar" class="wv-card analyze-apply-bar">
+                    <span>Apply Changes</span>
                     <button id="wvApplyAnalyzeBtn" class="btn secondary analyze-mini-btn" type="button">Apply</button>
                     <button id="wvCancelAnalyzeBtn" class="btn ghost analyze-mini-btn" type="button">Cancel</button>
                   </div>
@@ -642,6 +645,18 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js?v=20260225h"></script>
+  <!-- Comment delete confirmation modal -->
+  <div id="commentDeleteConfirmModal" class="modal" style="z-index:112;">
+    <div class="delete-confirm-card">
+      <h3 class="delete-confirm-title">Are you sure you want to delete this comment?</h3>
+      <p class="delete-confirm-sub">This cannot be undone.</p>
+      <div class="delete-confirm-btns">
+        <button class="delete-cancel-btn" id="commentDeleteConfirmCancel">Cancel</button>
+        <button class="delete-action-btn" id="commentDeleteConfirmOk">Delete</button>
+      </div>
+    </div>
+  </div>
+
+    <script src="/static/js/app.js?v=20260312a"></script>
 </body>
 </html>

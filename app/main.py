@@ -811,7 +811,27 @@ def ui_activities() -> list[dict[str, Any]]:
             updated["name"] = str(override["title"])
         if "type" in override:
             updated["type"] = str(override["type"])
-        for k in ["description", "comments", "comments_feed", "feel", "rpe", "tss_override", "if_value", "analysis_edits"]:
+        for k in [
+            "description",
+            "comments",
+            "comments_feed",
+            "feel",
+            "rpe",
+            "tss_override",
+            "if_value",
+            "analysis_edits",
+            "duration_min",
+            "distance_km",
+            "distance_m",
+            "elevation_m",
+            "distance_unit",
+            "elevation_unit",
+            "planned_tss",
+            "planned_if",
+            "planned_avg_speed",
+            "planned_calories",
+            "planned_work_kj",
+        ]:
             if k in override:
                 updated[k] = override[k]
         if override.get("hidden"):
@@ -1061,6 +1081,27 @@ def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) 
         current["if_value"] = _as_float(payload.get("if_value"))
     if "tss_override" in payload:
         current["tss_override"] = _as_float(payload.get("tss_override"))
+    for key in [
+        "duration_min",
+        "distance_km",
+        "distance_m",
+        "elevation_m",
+        "planned_tss",
+        "planned_if",
+        "planned_avg_speed",
+        "planned_calories",
+        "planned_work_kj",
+    ]:
+        if key in payload:
+            current[key] = _as_float(payload.get(key))
+    if "distance_unit" in payload:
+        unit = str(payload.get("distance_unit") or "").strip().lower()
+        if unit in {"km", "mi", "m"}:
+            current["distance_unit"] = unit
+    if "elevation_unit" in payload:
+        unit = str(payload.get("elevation_unit") or "").strip().lower()
+        if unit in {"m", "ft"}:
+            current["elevation_unit"] = unit
     if "analysis_edits" in payload:
         raw_analysis = payload.get("analysis_edits")
         if isinstance(raw_analysis, dict):

@@ -1,6 +1,7 @@
     // ── Custom delete confirm modal ──
     let _deleteConfirmResolver = null;
     let _applyConfirmResolver = null;
+    let _commentDeleteResolver = null;
     function confirmDelete({ message = 'This cannot be undone.', onConfirm } = {}) {
       const modal = document.getElementById('deleteConfirmModal');
       const subtitle = document.getElementById('deleteConfirmSub');
@@ -20,6 +21,17 @@
       modal.classList.add('open');
       return new Promise((resolve) => {
         _applyConfirmResolver = (ok) => {
+          resolve(Boolean(ok));
+        };
+      });
+    }
+
+    function confirmDeleteComment() {
+      const modal = document.getElementById('commentDeleteConfirmModal');
+      if (!modal) return Promise.resolve(false);
+      modal.classList.add('open');
+      return new Promise((resolve) => {
+        _commentDeleteResolver = (ok) => {
           resolve(Boolean(ok));
         };
       });
@@ -78,9 +90,11 @@
     let fitUploadTargetActivityId = null;
     let fitUploadContext = 'global';
     let modalDraft = null;
+    let workoutModalSession = 0;
     const calendarState = {
       anchorDate: todayKey(),
       scrollTop: 0,
+      viewportAnchor: null,
       hasRendered: false,
       scrollDebounce: null,
       activeScrollSync: false,
@@ -117,6 +131,63 @@
       return document.getElementById('calendarScroll');
     }
 
+    function rememberCalendarPosition() {
+      const wrap = getCalendarScrollContainer();
+      if (!wrap) return;
+      calendarState.scrollTop = wrap.scrollTop;
+      calendarState.viewportAnchor = null;
+      const containerRect = wrap.getBoundingClientRect();
+      const top = containerRect.top;
+      const bottom = containerRect.bottom;
+
+      const days = Array.from(wrap.querySelectorAll('.day[data-date]'));
+      const dayAnchor = days.find((el) => {
+        const r = el.getBoundingClientRect();
+        return r.bottom >= top && r.top <= bottom;
+      });
+      if (dayAnchor && dayAnchor.dataset.date) {
+        const r = dayAnchor.getBoundingClientRect();
+        calendarState.viewportAnchor = {
+          type: 'day',
+          key: String(dayAnchor.dataset.date),
+          offsetFromTop: r.top - top,
+        };
+        calendarState.anchorDate = String(dayAnchor.dataset.date);
+        return;
+      }
+
+      const rows = Array.from(wrap.querySelectorAll('.week-row[data-week-start]'));
+      const rowAnchor = rows.find((el) => {
+        const r = el.getBoundingClientRect();
+        return r.bottom >= top && r.top <= bottom;
+      });
+      if (rowAnchor && rowAnchor.dataset.weekStart) {
+        const r = rowAnchor.getBoundingClientRect();
+        calendarState.viewportAnchor = {
+          type: 'week',
+          key: String(rowAnchor.dataset.weekStart),
+          offsetFromTop: r.top - top,
+        };
+      }
+    }
+
+    function restoreCalendarPositionFromAnchor() {
+      const wrap = getCalendarScrollContainer();
+      const anchor = calendarState.viewportAnchor;
+      if (!wrap || !anchor || !anchor.type || !anchor.key) return false;
+      const selector = anchor.type === 'day'
+        ? `.day[data-date="${anchor.key}"]`
+        : `.week-row[data-week-start="${anchor.key}"]`;
+      const target = wrap.querySelector(selector);
+      if (!target) return false;
+      const containerRect = wrap.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const delta = (targetRect.top - containerRect.top) - Number(anchor.offsetFromTop || 0);
+      wrap.scrollTop += delta;
+      calendarState.scrollTop = wrap.scrollTop;
+      return true;
+    }
+
     function syncCalendarHeaderFromScroll() {
       const wrap = getCalendarScrollContainer();
       if (!wrap) return;
@@ -144,6 +215,7 @@
       const wrap = getCalendarScrollContainer();
       if (!wrap || calendarState.activeScrollSync) return;
       wrap.addEventListener('scroll', () => {
+        calendarState.scrollTop = wrap.scrollTop;
         if (calendarState.scrollDebounce) clearTimeout(calendarState.scrollDebounce);
         calendarState.scrollDebounce = setTimeout(() => {
           syncCalendarHeaderFromScroll();
@@ -399,6 +471,30 @@
       return { cls: 'paired-orange', arrow: best > 120 ? 'up' : 'down' };
     }
 
+    function modalStatusClass(payload) {
+      if (!payload) return 'status-gray';
+      const planned = payload.planned || (payload.source === 'planned' ? payload.data : null);
+      const data = payload.data || {};
+      const key = planned ? String(planned.date || '') : (data.start_date_local ? dateKeyFromDate(new Date(data.start_date_local)) : todayKey());
+      const completed = payload.source === 'strava'
+        ? data
+        : (planned ? completedFromPlanned(planned) : null);
+      const cls = planned
+        ? complianceStatus(planned, completed, key).cls
+        : (payload.source === 'strava' ? 'unplanned' : 'workout');
+      if (cls === 'paired-green') return 'status-green';
+      if (cls === 'paired-yellow') return 'status-yellow';
+      if (cls === 'paired-orange' || cls === 'paired-red') return 'status-red';
+      return 'status-gray';
+    }
+
+    function applyModalHeaderTint(payload) {
+      const top = document.querySelector('#workoutViewModal .wv-top');
+      if (!top) return;
+      top.classList.remove('status-green', 'status-yellow', 'status-red', 'status-gray');
+      top.classList.add(modalStatusClass(payload));
+    }
+
     function buildObservedDailyTssMap() {
       const map = {};
       const today = todayKey();
@@ -526,8 +622,8 @@
       const f = Number(feel || 0);
       const r = Number(rpe || 0);
       const icon = feelEmoji(f);
-      if (icon && r > 0) {
-        node.textContent = `${icon} ${r}`;
+      if (icon || r > 0) {
+        node.textContent = [icon, r > 0 ? String(r) : ''].filter(Boolean).join(' ');
         node.classList.remove('hidden');
         if (sep) sep.classList.remove('hidden');
       } else {
@@ -1102,6 +1198,7 @@
     }
 
     function openWorkoutModal(payload) {
+      const modalSession = ++workoutModalSession;
       window.currentWorkoutPayload = payload;
       const data = payload.data || {};
       const parentPlanned = payload.planned || null;
@@ -1181,7 +1278,7 @@
         });
       });
       if (hasFile) {
-        renderWorkoutAnalyze(payload);
+        renderWorkoutAnalyze(payload, modalSession);
       } else {
         document.getElementById('wvAnalyze').classList.add('hidden');
         document.getElementById('wvSelectionKv').innerHTML = '<div>No FIT stream for this workout.</div>';
@@ -1192,10 +1289,12 @@
       document.getElementById('wvFilesPopover').classList.add('hidden');
       document.getElementById('wvFilesTabBtn').classList.remove('active');
       document.getElementById('wvSportMenu').classList.add('hidden');
+      applyModalHeaderTint(payload);
       document.getElementById('workoutViewModal').classList.add('open');
     }
 
     async function closeWorkoutModal(discard = true) {
+      workoutModalSession += 1;
       const payload = window.currentWorkoutPayload;
       if (discard && modalDraft && payload) {
         const data = payload.data || {};
@@ -1232,9 +1331,9 @@
       fitUploadTargetActivityId = null;
     }
 
-    async function saveWorkoutView(closeAfter) {
+    async function persistWorkoutView() {
       const payload = window.currentWorkoutPayload;
-      if (!payload) return;
+      if (!payload) return { saved: false, emptyDraft: false };
       if (analyzeState && analyzeState.pendingDirty) {
         setWorkoutMode('analyze');
         const applyNow = await confirmApplyChanges();
@@ -1253,10 +1352,8 @@
       const sport = (modalDraft && modalDraft.sportType) || 'Other';
       const distanceUnitLocal = document.getElementById('pcDistanceUnit').value || 'km';
       const elevationUnitLocal = document.getElementById('pcElevationUnit').value || 'm';
-      const globalDistanceUnit = appSettings.unit_system === 'imperial' ? 'mi' : 'km';
-      const globalElevationUnit = appSettings.unit_system === 'imperial' ? 'ft' : 'm';
-      const persistedDistanceUnit = closeAfter ? globalDistanceUnit : distanceUnitLocal;
-      const persistedElevationUnit = closeAfter ? globalElevationUnit : elevationUnitLocal;
+      const persistedDistanceUnit = distanceUnitLocal;
+      const persistedElevationUnit = elevationUnitLocal;
       const plannedDuration = parseDurationToMin(document.getElementById('pcDurPlan').value);
       const plannedDistanceM = fromDisplayDistanceToMeters(document.getElementById('pcDistPlan').value, distanceUnitLocal);
       const plannedElevationM = fromDisplayElevationToMeters(document.getElementById('pcElevPlan').value, elevationUnitLocal);
@@ -1311,8 +1408,7 @@
       const isNewDraft = !!(modalDraft && modalDraft.isNewWorkout);
 
       if (isNewDraft && !hasAnyNumericValue) {
-        await closeWorkoutModal(false);
-        return;
+        return { saved: false, emptyDraft: true };
       }
 
       let activityData = payload.source === 'strava' ? data : null;
@@ -1424,13 +1520,35 @@
             rpe: rpeOut,
             if_value: completedIf,
             tss_override: completedTss,
+            duration_min: plannedDuration,
+            distance_km: plannedDistanceM / 1000,
+            distance_m: plannedDistanceM,
+            elevation_m: plannedElevationM,
+            distance_unit: persistedDistanceUnit,
+            elevation_unit: persistedElevationUnit,
+            planned_tss: plannedTss,
+            planned_if: plannedIf,
+            planned_avg_speed: plannedAvgSpeed,
+            planned_calories: plannedCalories,
+            planned_work_kj: plannedWorkKj,
             title: document.getElementById('wvTitle').value.trim(),
             type: sport,
           }),
         });
       }
-      await loadData();
-      if (closeAfter || isNewDraft) await closeWorkoutModal(false);
+      return { saved: true, emptyDraft: false };
+    }
+
+    async function handleSave() {
+      await persistWorkoutView();
+    }
+
+    async function handleSaveAndClose() {
+      const result = await persistWorkoutView();
+      await closeWorkoutModal(false);
+      if (result && (result.saved || result.emptyDraft)) {
+        await loadData();
+      }
     }
 
     function num(v) {
@@ -1466,6 +1584,7 @@
     }
 
     function renderWorkoutSummary(payload) {
+      applyModalHeaderTint(payload);
       const data = payload.data || {};
       const parentPlanned = payload.planned || null;
       const explicitCompleted = parentPlanned ? completedFromPlanned(parentPlanned) : completedFromPlanned(data);
@@ -1705,7 +1824,8 @@
       recalcDerivedLive();
     }
 
-    async function renderWorkoutAnalyze(payload) {
+    async function renderWorkoutAnalyze(payload, modalSession = workoutModalSession) {
+      if (modalSession !== workoutModalSession) return;
       const data = payload.data || {};
       const chart = document.getElementById('wvChart');
       const lapBody = document.querySelector('#wvLapTable tbody');
@@ -1725,6 +1845,7 @@
         return;
       }
       const fit = await resp.json();
+      if (modalSession !== workoutModalSession) return;
       const series = Array.isArray(fit.series) ? fit.series : [];
       const laps = Array.isArray(fit.laps) ? fit.laps : [];
       const summary = fit.summary || {};
@@ -1760,7 +1881,9 @@
         totalSec,
         wStart: 0,
         wEnd: totalSec,
+        selectionMode: 'none',
         selection: null,
+        lapHighlightRanges: [],
         hiddenChannels: new Set(),
         deletedChannels: new Set(),
         cursorSvgX: -1,
@@ -1774,6 +1897,7 @@
         workCuts: [],
         pendingCuts: [],
         startTrim: 0,
+        selectedLapKeys: new Set(),
       };
 
       const w = 1200;
@@ -1799,7 +1923,6 @@
       const applyBtn = document.getElementById('wvApplyAnalyzeBtn');
       const cancelBtn = document.getElementById('wvCancelAnalyzeBtn');
       const applyHost = document.getElementById('wvAnalyzeApplyHost');
-      if (applyBar && applyHost) applyHost.appendChild(applyBar);
 
       const persisted = ((payload.planned && payload.planned.analysis_edits) || data.analysis_edits || {});
       const persistedDeleted = Array.isArray(persisted.deletedChannels) ? persisted.deletedChannels : [];
@@ -1881,17 +2004,15 @@
           .map((p) => ({ ...p, dT: displayFromOriginal(p.t) }));
       }
 
-      function cutsEqual(a, b) {
-        if (a.length !== b.length) return false;
-        for (let i = 0; i < a.length; i += 1) {
-          if (Math.abs(a[i].startSec - b[i].startSec) > 0.01) return false;
-          if (Math.abs(a[i].endSec - b[i].endSec) > 0.01) return false;
-        }
-        return true;
-      }
-
       function syncPendingState() {
-        analyzeState.pendingDirty = normalizeCuts(analyzeState.pendingCuts).length > 0;
+        analyzeState.pendingCuts = normalizeCuts(analyzeState.pendingCuts);
+        const deletedNow = Array.from(analyzeState.workDeleted || []).sort();
+        const deletedPersisted = Array.from(analyzeState.persistedDeleted || []).sort();
+        const deletedChanged = deletedNow.length !== deletedPersisted.length
+          || deletedNow.some((key, i) => key !== deletedPersisted[i]);
+        const cutsChanged = analyzeState.pendingCuts.length > 0;
+        analyzeState.pendingDirty = deletedChanged || cutsChanged;
+        if (applyHost) applyHost.classList.toggle('hidden', !analyzeState.pendingDirty);
         if (applyBar) applyBar.classList.toggle('hidden', !analyzeState.pendingDirty);
       }
 
@@ -2039,15 +2160,64 @@
         return { duration, distance, tss, minVal, mean, maxVal };
       }
 
+      function statsForDiscreteRanges(ranges) {
+        const validRanges = (Array.isArray(ranges) ? ranges : [])
+          .map((r) => ({ startSec: Number(r.startSec || 0), endSec: Number(r.endSec || 0) }))
+          .filter((r) => r.endSec > r.startSec);
+        if (!validRanges.length) {
+          return statsForRange(analyzeState.wStart, analyzeState.wEnd);
+        }
+        const intervalPoints = (startSec, endSec) => pts.filter((p) => p.t >= startSec && p.t <= endSec && !inCut(p.t, false));
+        const duration = validRanges.reduce((sum, r) => sum + lapKeptDuration(r.startSec, r.endSec), 0);
+        const distance = validRanges.reduce((sum, r) => {
+          const seg = intervalPoints(r.startSec, r.endSec);
+          if (seg.length > 1 && seg[0].distance != null && seg[seg.length - 1].distance != null) {
+            return sum + Math.max(0, seg[seg.length - 1].distance - seg[0].distance);
+          }
+          return sum;
+        }, 0);
+        const selectedPts = pts.filter((p) => !inCut(p.t, false) && validRanges.some((r) => p.t >= r.startSec && p.t <= r.endSec));
+        const eff = effectivePoints();
+        const effectiveTotal = Math.max(1, (eff.length ? eff[eff.length - 1].dT : totalSec));
+        const frac = Math.max(0, duration) / effectiveTotal;
+        const totalTss = Number(summary.tss || data.tss_override || activityToTss(data) || 0);
+        const tss = totalTss > 0 ? (totalTss * frac) : null;
+        const minVal = (k) => {
+          const vals = selectedPts.map((p) => p[k]).filter((v) => v !== null);
+          return vals.length ? Math.min(...vals) : null;
+        };
+        const mean = (k) => {
+          const vals = selectedPts.map((p) => p[k]).filter((v) => v !== null);
+          return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+        };
+        const maxVal = (k) => {
+          const vals = selectedPts.map((p) => p[k]).filter((v) => v !== null);
+          return vals.length ? Math.max(...vals) : null;
+        };
+        return { duration: Math.max(1, duration), distance, tss, minVal, mean, maxVal };
+      }
+
       function renderSelectionStats() {
         const sel = analyzeState.selection;
+        const hasLapSelection = analyzeState.selectionMode === 'laps' && Array.isArray(analyzeState.lapHighlightRanges) && analyzeState.lapHighlightRanges.length > 0;
         const eff = effectivePoints();
         const effectiveTotal = Math.max(1, (eff.length ? eff[eff.length - 1].dT : totalSec));
         const isZoomed = analyzeState.wStart > 0 || analyzeState.wEnd < effectiveTotal;
-        if (selectionTitle) selectionTitle.textContent = (sel || isZoomed) ? 'Selection' : 'Entire Workout';
-        const startT = sel ? Math.min(sel.start, sel.end) : analyzeState.wStart;
-        const endT = sel ? Math.max(sel.start, sel.end) : analyzeState.wEnd;
-        const { duration, distance, tss, minVal, mean, maxVal } = statsForRange(startT, endT);
+        const cutFocused = analyzeState.startTrim > 0 || analyzeState.endTrim < totalSec;
+        if (selectionTitle) selectionTitle.textContent = (sel || hasLapSelection || isZoomed || cutFocused) ? 'Selection' : 'Entire Workout';
+        let stats;
+        if (sel && analyzeState.selectionMode === 'graph') {
+          const startT = Math.min(sel.start, sel.end);
+          const endT = Math.max(sel.start, sel.end);
+          stats = statsForRange(startT, endT);
+        } else if (hasLapSelection) {
+          stats = statsForDiscreteRanges(analyzeState.lapHighlightRanges);
+        } else {
+          stats = statsForRange(analyzeState.wStart, analyzeState.wEnd);
+        }
+        const {
+          duration, distance, tss, minVal, mean, maxVal,
+        } = stats;
         const metricRows = [];
         const pushRow = (name, key, unit, convert = (v) => v) => {
           const min = minVal(key);
@@ -2159,8 +2329,8 @@
                 } else if (action === 'delete') {
                   analyzeState.workDeleted.add(m.key);
                   analyzeState.hiddenChannels.delete(m.key);
-                  syncPendingState();
                 }
+                syncPendingState();
                 popup.remove();
                 renderChannelList();
                 renderMain();
@@ -2236,7 +2406,18 @@
           });
         });
 
-        if (analyzeState.selection) {
+        if (analyzeState.selectionMode === 'laps' && Array.isArray(analyzeState.lapHighlightRanges)) {
+          analyzeState.lapHighlightRanges.forEach((rangeSel) => {
+            const dStart = displayFromOriginal(rangeSel.startSec);
+            const dEnd = displayFromOriginal(rangeSel.endSec);
+            const rStart = Math.max(analyzeState.wStart, Math.min(dStart, dEnd));
+            const rEnd = Math.min(analyzeState.wEnd, Math.max(dStart, dEnd));
+            if (rEnd <= rStart) return;
+            const sx1 = timeToX(rStart);
+            const sx2 = timeToX(rEnd);
+            svg += `<rect x="${sx1.toFixed(1)}" y="${top}" width="${Math.max(1, sx2 - sx1).toFixed(1)}" height="${ch}" fill="rgba(50,120,255,0.12)" stroke="rgba(40,100,240,0.35)" stroke-width="1"/>`;
+          });
+        } else if (analyzeState.selectionMode === 'graph' && analyzeState.selection) {
           const sx1 = timeToX(Math.min(analyzeState.selection.start, analyzeState.selection.end));
           const sx2 = timeToX(Math.max(analyzeState.selection.start, analyzeState.selection.end));
           svg += `<rect x="${sx1.toFixed(1)}" y="${top}" width="${Math.max(1, sx2 - sx1).toFixed(1)}" height="${ch}" fill="rgba(50,120,255,0.12)" stroke="rgba(40,100,240,0.35)" stroke-width="1"/>`;
@@ -2285,11 +2466,14 @@
         }
         const eff = effectivePoints();
         const effectiveTotal = Math.max(1, (eff.length ? eff[eff.length - 1].dT : totalSec));
-        const canZoom = !!(analyzeState.selection && Math.abs(analyzeState.selection.end - analyzeState.selection.start) > 1);
+        const canZoom = !!(analyzeState.selectionMode === 'graph' && analyzeState.selection && Math.abs(analyzeState.selection.end - analyzeState.selection.start) > 1);
+        const hasLapCutSelection = analyzeState.selectionMode === 'laps'
+          && Array.isArray(analyzeState.lapHighlightRanges)
+          && analyzeState.lapHighlightRanges.some((r) => Number(r.endSec || 0) - Number(r.startSec || 0) > 1);
         const isZoomed = analyzeState.wStart > 0 || analyzeState.wEnd < effectiveTotal;
         zoomBtn.textContent = isZoomed && !canZoom ? 'Unzoom' : 'Zoom';
         zoomBtn.disabled = !canZoom && !isZoomed;
-        cutBtn.disabled = !canZoom;
+        cutBtn.disabled = !(canZoom || hasLapCutSelection);
         if (unzoomBtn) unzoomBtn.classList.add('hidden');
         renderSelectionStats();
       }
@@ -2326,8 +2510,13 @@
         if (ev.button !== 0) return;
         ev.preventDefault();
         document.body.classList.add('analyze-dragging');
+        analyzeState.selectedLapKeys.clear();
+        analyzeState.lapHighlightRanges = [];
+        lapBody.querySelectorAll('.lap-select').forEach((cb) => { cb.checked = false; });
+        lapBody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
         const { time } = plotMouseToTime(ev);
         dragStart = time;
+        analyzeState.selectionMode = 'graph';
         analyzeState.selection = { start: time, end: time };
       };
       chart.onmousemove = (ev) => {
@@ -2339,14 +2528,19 @@
         }
         if (dragStart === null) return;
         const { time } = plotMouseToTime(ev);
+        analyzeState.selectionMode = 'graph';
         analyzeState.selection = { start: dragStart, end: time };
         renderMain();
       };
       chart.onmouseup = (ev) => {
         if (dragStart === null) return;
         const { time } = plotMouseToTime(ev);
+        analyzeState.selectionMode = 'graph';
         analyzeState.selection = { start: dragStart, end: time };
-        if (Math.abs(time - dragStart) <= 1) analyzeState.selection = null;
+        if (Math.abs(time - dragStart) <= 1) {
+          analyzeState.selection = null;
+          analyzeState.selectionMode = 'none';
+        }
         dragStart = null;
         document.body.classList.remove('analyze-dragging');
         renderMain();
@@ -2361,16 +2555,17 @@
         const eff = effectivePoints();
         const effectiveTotal = Math.max(1, (eff.length ? eff[eff.length - 1].dT : totalSec));
         const isZoomed = analyzeState.wStart > 0 || analyzeState.wEnd < effectiveTotal;
-        const canZoom = !!(analyzeState.selection && Math.abs(analyzeState.selection.end - analyzeState.selection.start) > 1);
+        const canZoom = !!(analyzeState.selectionMode === 'graph' && analyzeState.selection && Math.abs(analyzeState.selection.end - analyzeState.selection.start) > 1);
         if (isZoomed && !canZoom) {
           analyzeState.zoomStack = [];
           analyzeState.wStart = 0;
           analyzeState.wEnd = effectiveTotal;
           analyzeState.selection = null;
+          analyzeState.selectionMode = 'none';
           renderMain();
           return;
         }
-        if (!analyzeState.selection) return;
+        if (analyzeState.selectionMode !== 'graph' || !analyzeState.selection) return;
         const start = Math.min(analyzeState.selection.start, analyzeState.selection.end);
         const end = Math.max(analyzeState.selection.start, analyzeState.selection.end);
         if (Math.abs(end - start) <= 1) return;
@@ -2378,17 +2573,32 @@
         analyzeState.wStart = start;
         analyzeState.wEnd = end;
         analyzeState.selection = null;
+        analyzeState.selectionMode = 'none';
         renderMain();
       };
       cutBtn.onclick = () => {
-        if (!analyzeState.selection) return;
-        const dStart = Math.min(analyzeState.selection.start, analyzeState.selection.end);
-        const dEnd = Math.max(analyzeState.selection.start, analyzeState.selection.end);
-        if (Math.abs(dEnd - dStart) <= 1) return;
-        const start = originalFromDisplay(dStart);
-        const end = originalFromDisplay(dEnd);
-        analyzeState.pendingCuts.push({ startSec: start, endSec: end });
+        const cutRanges = [];
+        if (analyzeState.selectionMode === 'graph' && analyzeState.selection) {
+          const dStart = Math.min(analyzeState.selection.start, analyzeState.selection.end);
+          const dEnd = Math.max(analyzeState.selection.start, analyzeState.selection.end);
+          if (Math.abs(dEnd - dStart) > 1) {
+            cutRanges.push({ startSec: originalFromDisplay(dStart), endSec: originalFromDisplay(dEnd) });
+          }
+        } else if (analyzeState.selectionMode === 'laps' && Array.isArray(analyzeState.lapHighlightRanges)) {
+          analyzeState.lapHighlightRanges.forEach((r) => {
+            const start = Number(r.startSec || 0);
+            const end = Number(r.endSec || 0);
+            if ((end - start) > 1) cutRanges.push({ startSec: start, endSec: end });
+          });
+        }
+        if (!cutRanges.length) return;
+        analyzeState.pendingCuts.push(...cutRanges);
         analyzeState.selection = null;
+        analyzeState.selectionMode = 'none';
+        analyzeState.selectedLapKeys.clear();
+        analyzeState.lapHighlightRanges = [];
+        lapBody.querySelectorAll('.lap-select').forEach((cb) => { cb.checked = false; });
+        lapBody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
         syncPendingState();
         renderMain();
       };
@@ -2399,6 +2609,7 @@
           const eff = effectivePoints();
           analyzeState.wEnd = Math.max(1, (eff.length ? eff[eff.length - 1].dT : totalSec));
           analyzeState.selection = null;
+          analyzeState.selectionMode = 'none';
           renderMain();
         };
       }
@@ -2420,7 +2631,11 @@
         cancelBtn.onclick = () => {
           analyzeState.pendingCuts = [];
           analyzeState.selection = null;
+          analyzeState.selectionMode = 'none';
+          analyzeState.workDeleted = new Set(analyzeState.persistedDeleted);
+          analyzeState.hiddenChannels.clear();
           syncPendingState();
+          renderChannelList();
           renderMain();
         };
       }
@@ -2428,7 +2643,11 @@
       analyzeState.cancelPending = () => {
         analyzeState.pendingCuts = [];
         analyzeState.selection = null;
+        analyzeState.selectionMode = 'none';
+        analyzeState.workDeleted = new Set(analyzeState.persistedDeleted);
+        analyzeState.hiddenChannels.clear();
         syncPendingState();
+        renderChannelList();
         renderMain();
       };
 
@@ -2450,6 +2669,32 @@
           kept -= overlap(startSec, endSec, c.startSec, c.endSec);
         });
         return Math.max(0, kept);
+      }
+      function applyLapSelectionFromChecks() {
+        const checks = Array.from(lapBody.querySelectorAll('.lap-select'));
+        const selected = checks
+          .filter((cb) => cb.checked)
+          .map((cb) => ({
+            key: cb.dataset.lapKey,
+            startSec: Number(cb.dataset.startSec || 0),
+            endSec: Number(cb.dataset.endSec || 0),
+            row: cb.closest('tr'),
+          }))
+          .filter((x) => x.endSec > x.startSec);
+        analyzeState.selectedLapKeys = new Set(selected.map((x) => x.key));
+        analyzeState.lapHighlightRanges = selected.map((x) => ({ startSec: x.startSec, endSec: x.endSec }));
+        Array.from(lapBody.querySelectorAll('tr')).forEach((row) => row.classList.remove('selected'));
+        selected.forEach((x) => {
+          if (x.row) x.row.classList.add('selected');
+        });
+        if (!selected.length) {
+          analyzeState.selection = null;
+          analyzeState.selectionMode = 'none';
+        } else {
+          analyzeState.selection = null;
+          analyzeState.selectionMode = 'laps';
+        }
+        renderMain();
       }
       function renderLapRows() {
         lapBody.innerHTML = '';
@@ -2495,7 +2740,10 @@
           const tss = (npLap && ifCalc) ? ((dur * npLap * ifCalc) / (ftpValue * 3600) * 100) : null;
           const workCalc = (avg('power') != null && dur > 0) ? ((avg('power') * dur) / 1000) : null;
           const row = document.createElement('tr');
+          const lapKey = String(idx);
+          const checked = analyzeState.selectedLapKeys.has(lapKey) ? 'checked' : '';
           row.innerHTML = `
+            <td class="lap-check-col"><input type="checkbox" class="lap-select" data-lap-key="${lapKey}" data-start-sec="${startSec}" data-end-sec="${endSec}" ${checked} /></td>
             <td>${lap.name || `Lap ${idx + 1}`}</td>
             <td>${fmtTimeShort(lap.start)}</td>
             <td>${fmtTimeShort(lap.end)}</td>
@@ -2515,14 +2763,15 @@
             <td>${workCalc == null ? '' : Math.round(workCalc)}</td>
             <td>${lap.calories == null ? '' : lap.calories}</td>
           `;
-          row.addEventListener('click', () => {
-            lapBody.querySelectorAll('tr').forEach((tr) => tr.classList.remove('selected'));
-            row.classList.add('selected');
-            analyzeState.selection = { start: displayFromOriginal(startSec), end: displayFromOriginal(endSec) };
-            renderMain();
-          });
+          const check = row.querySelector('.lap-select');
+          if (check) {
+            check.addEventListener('change', () => {
+              applyLapSelectionFromChecks();
+            });
+          }
           lapBody.appendChild(row);
         });
+        applyLapSelectionFromChecks();
       }
       renderLapRows();
 
@@ -2641,6 +2890,7 @@
 
     function renderCalendar(options = {}) {
       const { preserveScroll = true, anchorDate = '', jumpToDate = '' } = options;
+      if (preserveScroll) rememberCalendarPosition();
       const dayMap = buildDayAggregateMap();
       const plannedById = new Map(calendarItems.filter(i => i.kind === 'workout').map(i => [String(i.id), i]));
       const stravaById = new Map(activities.map(a => [String(a.id), a]));
@@ -2776,7 +3026,26 @@
             }
             const a = entry.completed;
             const pairedPlanned = entry.pair ? plannedById.get(String(entry.pair.planned_id)) : null;
-            const compStat = pairedPlanned ? complianceStatus(pairedPlanned, a, key).cls : 'unplanned';
+            const hasSelfPlanned = !pairedPlanned && (
+              Number(a.duration_min || 0) > 0
+              || Number(a.distance_m || 0) > 0
+              || Number(a.distance_km || 0) > 0
+              || Number(a.planned_tss || 0) > 0
+              || Number(a.planned_if || 0) > 0
+            );
+            const selfPlanned = hasSelfPlanned ? {
+              kind: 'workout',
+              duration_min: Number(a.duration_min || 0),
+              distance_m: Number(a.distance_m || (Number(a.distance_km || 0) * 1000)),
+              distance_km: Number(a.distance_km || 0),
+              planned_tss: Number(a.planned_tss || 0),
+              planned_if: Number(a.planned_if || 0),
+            } : null;
+            const compStat = pairedPlanned
+              ? complianceStatus(pairedPlanned, a, key).cls
+              : selfPlanned
+                ? complianceStatus(selfPlanned, a, key).cls
+                : 'unplanned';
             const unitForCard = String((pairedPlanned && pairedPlanned.distance_unit) || a.distance_unit || distanceUnit || 'km');
             const card = document.createElement('div');
             card.className = `work-card ${compStat}`;
@@ -2851,7 +3120,25 @@
         requestAnimationFrame(() => {
           const target = wrap.querySelector(`.day[data-date="${jumpToDate}"]`);
           if (target) {
-            wrap.scrollTop = target.offsetTop;
+            const row = target.closest('.week-row');
+            const wrapTop = wrap.getBoundingClientRect().top;
+            const baseScroll = wrap.scrollTop;
+            const targetTop = target.getBoundingClientRect().top - wrapTop + baseScroll;
+            const rowTop = row ? (row.getBoundingClientRect().top - wrapTop + baseScroll) : targetTop;
+            wrap.scrollTop = Math.max(0, Math.round(rowTop));
+            calendarState.scrollTop = wrap.scrollTop;
+          }
+          syncCalendarHeaderFromScroll();
+        });
+        return;
+      }
+
+      if (preserveScroll) {
+        requestAnimationFrame(() => {
+          const restored = restoreCalendarPositionFromAnchor();
+          if (!restored) {
+            wrap.scrollTop = restoreScrollTop;
+            calendarState.scrollTop = wrap.scrollTop;
           }
           syncCalendarHeaderFromScroll();
         });
@@ -2859,13 +3146,13 @@
       }
 
       wrap.scrollTop = restoreScrollTop;
+      calendarState.scrollTop = wrap.scrollTop;
       syncCalendarHeaderFromScroll();
     }
 
     function jumpToCurrentMonth() {
       const today = todayKey();
       calendarState.anchorDate = today;
-      calendarState.scrollTop = 0;
       renderCalendar({ preserveScroll: false, anchorDate: today, jumpToDate: today });
     }
 
@@ -2946,7 +3233,7 @@
       updateUnitButtons();
       renderHome();
       if (isCalendarActive()) {
-        renderCalendar({ preserveScroll: true, anchorDate: calendarState.anchorDate });
+        renderCalendar({ preserveScroll: true });
       }
       renderDashboard();
       renderSettings();
@@ -3112,11 +3399,10 @@
         analyzeState.cancelPending();
       }
       await closeWorkoutModal(true);
-      await loadData();
     });
-    document.getElementById('cancelWorkoutView').addEventListener('click', async () => { await closeWorkoutModal(true); await loadData(); });
-    document.getElementById('saveWorkoutView').addEventListener('click', () => saveWorkoutView(false));
-    document.getElementById('saveCloseWorkoutView').addEventListener('click', () => saveWorkoutView(true));
+    document.getElementById('cancelWorkoutView').addEventListener('click', async () => { await closeWorkoutModal(true); });
+    document.getElementById('saveWorkoutView').addEventListener('click', handleSave);
+    document.getElementById('saveCloseWorkoutView').addEventListener('click', handleSaveAndClose);
     document.getElementById('deleteWorkoutView').addEventListener('click', () => {
       const payload = window.currentWorkoutPayload;
       if (!payload) return;
@@ -3182,13 +3468,15 @@
       input.value = '';
       renderCommentsFeed();
     });
-    document.getElementById('wvCommentsFeed').addEventListener('click', (ev) => {
+    document.getElementById('wvCommentsFeed').addEventListener('click', async (ev) => {
       const del = ev.target.closest('.comment-delete');
       if (!del || !modalDraft) return;
       const item = del.closest('.comment-item');
       if (!item) return;
       const idx = Number(item.dataset.index);
       if (!Number.isInteger(idx) || idx < 0) return;
+      const ok = await confirmDeleteComment();
+      if (!ok) return;
       modalDraft.commentsFeed.splice(idx, 1);
       renderCommentsFeed();
     });
@@ -3229,7 +3517,7 @@
     });
     document.getElementById('workoutViewModal').addEventListener('click', (event) => {
       if (event.target.id === 'workoutViewModal') {
-        closeWorkoutModal(true).then(() => loadData());
+        closeWorkoutModal(true);
       }
     });
     document.getElementById('contextMenu').addEventListener('click', (ev) => ev.stopPropagation());
@@ -3295,6 +3583,34 @@
         if (_applyConfirmResolver) {
           const resolver = _applyConfirmResolver;
           _applyConfirmResolver = null;
+          resolver(false);
+        }
+      }
+    });
+
+    // ── Comment delete confirm modal wiring ──
+    document.getElementById('commentDeleteConfirmCancel').addEventListener('click', () => {
+      document.getElementById('commentDeleteConfirmModal').classList.remove('open');
+      if (_commentDeleteResolver) {
+        const resolver = _commentDeleteResolver;
+        _commentDeleteResolver = null;
+        resolver(false);
+      }
+    });
+    document.getElementById('commentDeleteConfirmOk').addEventListener('click', () => {
+      document.getElementById('commentDeleteConfirmModal').classList.remove('open');
+      if (_commentDeleteResolver) {
+        const resolver = _commentDeleteResolver;
+        _commentDeleteResolver = null;
+        resolver(true);
+      }
+    });
+    document.getElementById('commentDeleteConfirmModal').addEventListener('click', (ev) => {
+      if (ev.target.id === 'commentDeleteConfirmModal') {
+        document.getElementById('commentDeleteConfirmModal').classList.remove('open');
+        if (_commentDeleteResolver) {
+          const resolver = _commentDeleteResolver;
+          _commentDeleteResolver = null;
           resolver(false);
         }
       }
