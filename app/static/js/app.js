@@ -847,8 +847,12 @@
         document.getElementById('dDistance').value = '';
       }
       document.getElementById('dIntensity').value = existingItem ? (existingItem.intensity || 6) : '6';
-      document.getElementById('dEventType').value = existingItem ? (existingItem.event_type || 'Race') : 'Race';
+      document.getElementById('dEventType').value = existingItem ? (existingItem.event_type || 'Road Running') : 'Road Running';
       document.getElementById('dAvailability').value = existingItem ? (existingItem.availability || 'Unavailable') : 'Unavailable';
+      const activePriority = existingItem ? (existingItem.priority || 'C') : 'C';
+      document.querySelectorAll('#dEventPriority .seg-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.priority === activePriority);
+      });
 
       document.getElementById('workoutFields').classList.toggle('hidden', selectedKind !== 'workout');
       document.getElementById('eventFields').classList.toggle('hidden', selectedKind !== 'event');
@@ -885,6 +889,8 @@
 
       if (selectedKind === 'event') {
         payload.event_type = document.getElementById('dEventType').value;
+        const activeP = document.querySelector('#dEventPriority .seg-btn.active');
+        payload.priority = activeP ? activeP.dataset.priority : 'C';
       }
 
       if (selectedKind === 'availability') {
@@ -2909,33 +2915,153 @@
       renderMain();
     }
 
+    function buildCtlProjection(eventDateKey) {
+      const todayMet = buildMetricsToDate(todayKey());
+      const historySeries = todayMet.ctlSeries.slice(-90);
+      const todayCtl = historySeries[historySeries.length - 1];
+
+      const plannedMap = {};
+      const today = todayKey();
+      calendarItems
+        .filter(i => i.kind === 'workout' && i.date > today)
+        .forEach(i => { plannedMap[i.date] = (plannedMap[i.date] || 0) + itemToTss(i); });
+
+      const projectedSeries = [todayCtl];
+      let ctlPrev = todayCtl;
+      const cur = parseDateKey(today);
+      const end = parseDateKey(eventDateKey);
+      cur.setDate(cur.getDate() + 1);
+      while (cur <= end) {
+        const tss = plannedMap[dateKeyFromDate(cur)] || 0;
+        ctlPrev = ctlPrev + (tss - ctlPrev) / 42;
+        projectedSeries.push(ctlPrev);
+        cur.setDate(cur.getDate() + 1);
+      }
+
+      return { historySeries, projectedSeries, todayCtl, eventCtl: ctlPrev };
+    }
+
+    function renderEventCtlChart(container, event) {
+      const proj = buildCtlProjection(event.date);
+      const { historySeries, projectedSeries, todayCtl, eventCtl } = proj;
+
+      const W = 500, H = 160, PAD = { t: 16, r: 80, b: 20, l: 10 };
+      const chartW = W - PAD.l - PAD.r;
+      const chartH = H - PAD.t - PAD.b;
+      const totalPoints = historySeries.length + projectedSeries.length - 1;
+      const allVals = [...historySeries, ...projectedSeries.slice(1)];
+      const minV = Math.min(...allVals) * 0.92;
+      const maxV = Math.max(...allVals, 1) * 1.06;
+
+      const xOf = i => PAD.l + (i / (totalPoints - 1)) * chartW;
+      const yOf = v => PAD.t + chartH - ((v - minV) / (maxV - minV)) * chartH;
+
+      const histPts = historySeries.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ');
+      const todayIdx = historySeries.length - 1;
+      const projPts = projectedSeries.map((v, i) => `${xOf(todayIdx + i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ');
+
+      const todayX = xOf(todayIdx), todayY = yOf(todayCtl);
+      const eventX = xOf(totalPoints - 1), eventY = yOf(eventCtl);
+      const eventCtlRounded = Math.round(eventCtl);
+      const todayCtlRounded = Math.round(todayCtl);
+
+      container.innerHTML = `
+        <svg class="event-ctl-chart" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" aria-label="CTL trend to event">
+          <defs>
+            <linearGradient id="evHistGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#5a8fd4" stop-opacity="0.18"/>
+              <stop offset="100%" stop-color="#5a8fd4" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <polyline points="${histPts}" fill="none" stroke="#4a7fc1" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+          <polyline points="${projPts}" fill="none" stroke="#6a9fd8" stroke-width="1.8" stroke-dasharray="5,4" stroke-linejoin="round" stroke-linecap="round"/>
+          <circle cx="${todayX.toFixed(1)}" cy="${todayY.toFixed(1)}" r="5" fill="#4a7fc1" stroke="#fff" stroke-width="1.5"/>
+          <text x="${(todayX + 8).toFixed(1)}" y="${(todayY - 6).toFixed(1)}" class="ectl-label" font-weight="700">Today ${todayCtlRounded} CTL</text>
+          <circle cx="${eventX.toFixed(1)}" cy="${eventY.toFixed(1)}" r="5" fill="#7a9fc0" stroke="#fff" stroke-width="1.5"/>
+          <text x="${(eventX - 4).toFixed(1)}" y="${(eventY - 10).toFixed(1)}" class="ectl-label" text-anchor="end">Event ${eventCtlRounded} CTL</text>
+          <text x="${(eventX - 4).toFixed(1)}" y="${(eventY - 22).toFixed(1)}" class="ectl-label" text-anchor="end">${event.title}</text>
+        </svg>`;
+    }
+
     function renderEvents() {
       const list = document.getElementById('eventsList');
-      const events = calendarItems
+      const today = todayKey();
+      const allEvents = calendarItems
         .filter(i => i.kind === 'event')
-        .sort((a, b) => (a.date > b.date ? 1 : -1))
-        .slice(0, 5);
+        .sort((a, b) => (a.date > b.date ? 1 : -1));
 
       list.innerHTML = '';
-      if (!events.length) {
+      if (!allEvents.length) {
         list.innerHTML = '<p class="meta">No events yet. Click + to add one.</p>';
         return;
       }
 
-      events.forEach(e => {
-        const node = document.createElement('div');
-        node.className = 'event-item';
-        node.innerHTML = `<h4>${e.title}</h4><p>${e.date} • ${e.event_type || 'Event'}</p>`;
-        list.appendChild(node);
+      const priorityOrder = { A: 0, B: 1, C: 2 };
+      const upcoming = allEvents.filter(e => e.date >= today);
+      upcoming.sort((a, b) => {
+        const pa = priorityOrder[a.priority] ?? 2;
+        const pb = priorityOrder[b.priority] ?? 2;
+        if (pa !== pb) return pa - pb;
+        return a.date > b.date ? 1 : -1;
       });
+      const featured = upcoming[0] || allEvents[allEvents.length - 1];
+      const eventDate = parseDateKey(featured.date);
+      const todayDate = parseDateKey(today);
+      const daysUntil = Math.round((eventDate - todayDate) / 86400000);
+      const weeksUntil = Math.round(daysUntil / 7);
+      const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+      const mon = months[eventDate.getMonth()];
+      const day = eventDate.getDate();
+
+      const featuredEl = document.createElement('div');
+      featuredEl.className = 'event-featured';
+
+      const badgeEl = document.createElement('div');
+      badgeEl.className = 'event-date-badge';
+      badgeEl.innerHTML = `<span class="edb-month">${mon}</span><span class="edb-day">${day}</span>`;
+
+      const infoEl = document.createElement('div');
+      infoEl.className = 'event-featured-info';
+      const countdownText = daysUntil > 0
+        ? `${weeksUntil > 0 ? weeksUntil + ' WEEK' + (weeksUntil !== 1 ? 'S' : '') : daysUntil + ' DAY' + (daysUntil !== 1 ? 'S' : '')} UNTIL EVENT`
+        : daysUntil === 0 ? 'TODAY' : 'PAST EVENT';
+      infoEl.innerHTML = `<div class="event-featured-title">${featured.title}</div>
+        <div class="event-countdown">${countdownText}</div>`;
+
+      featuredEl.appendChild(badgeEl);
+      featuredEl.appendChild(infoEl);
+      list.appendChild(featuredEl);
+
+      const chartDiv = document.createElement('div');
+      chartDiv.className = 'event-ctl-chart-wrap';
+      renderEventCtlChart(chartDiv, featured);
+      list.appendChild(chartDiv);
+
+      const tableDiv = document.createElement('div');
+      tableDiv.className = 'events-table';
+      allEvents.forEach((e, idx) => {
+        const eDate = parseDateKey(e.date);
+        const mo = months[eDate.getMonth()];
+        const dy = String(eDate.getDate()).padStart(2, '0');
+        const row = document.createElement('div');
+        row.className = 'events-row' + (idx % 2 === 1 ? ' events-row-alt' : '');
+        row.innerHTML = `<span class="events-row-date">${mo} ${dy}</span><span class="events-row-title">${e.title}</span>`;
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => openDetailModal(e));
+        tableDiv.appendChild(row);
+      });
+      list.appendChild(tableDiv);
     }
 
     function renderGoals() {
       const list = document.getElementById('goalsList');
       const goals = calendarItems
         .filter(i => i.kind === 'goal')
-        .sort((a, b) => (a.date > b.date ? 1 : -1))
-        .slice(0, 6);
+        .sort((a, b) => {
+          const so = (a.sort_order ?? 0) - (b.sort_order ?? 0);
+          if (so !== 0) return so;
+          return a.date > b.date ? 1 : -1;
+        });
 
       list.innerHTML = '';
       if (!goals.length) {
@@ -2943,11 +3069,94 @@
         return;
       }
 
-      goals.forEach(g => {
-        const node = document.createElement('div');
-        node.className = 'goal-item';
-        node.innerHTML = `<h4>${g.title}</h4><p>${g.date}</p>`;
-        list.appendChild(node);
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+      // Header row
+      const header = document.createElement('div');
+      header.className = 'goals-header-row';
+      header.innerHTML = '<span class="goals-col-date">Date</span><span class="goals-col-label">Goals</span>';
+      list.appendChild(header);
+
+      let dragSrc = null;
+
+      goals.forEach((g, idx) => {
+        const gDate = parseDateKey(g.date);
+        const dateLabel = `${months[gDate.getMonth()]} ${gDate.getDate()}`;
+
+        const row = document.createElement('div');
+        row.className = 'goals-row' + (idx % 2 === 1 ? ' goals-row-alt' : '') + (g.completed ? ' goals-row-done' : '');
+        row.draggable = true;
+        row.dataset.id = g.id;
+
+        row.innerHTML = `
+          <span class="goals-col-date goals-date-cell">${dateLabel}</span>
+          <span class="goals-col-goal">
+            <span class="goals-drag-handle" title="Drag to reorder">⠿</span>
+            <input type="checkbox" class="goals-check" ${g.completed ? 'checked' : ''} aria-label="Mark complete" />
+            <span class="goals-title${g.completed ? ' goals-title-done' : ''}">${g.title}</span>
+          </span>`;
+
+        // Checkbox toggle
+        row.querySelector('.goals-check').addEventListener('change', async (e) => {
+          e.stopPropagation();
+          await fetch(`/calendar-items/${g.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...g, completed: e.target.checked }),
+          });
+          await loadData();
+        });
+
+        // Click row to open edit (not on checkbox/handle)
+        row.addEventListener('click', (e) => {
+          if (e.target.closest('.goals-check') || e.target.closest('.goals-drag-handle')) return;
+          openDetailModal(g);
+        });
+
+        // Drag-and-drop
+        row.addEventListener('dragstart', (e) => {
+          dragSrc = row;
+          e.dataTransfer.effectAllowed = 'move';
+          row.classList.add('goals-dragging');
+        });
+        row.addEventListener('dragend', () => {
+          row.classList.remove('goals-dragging');
+          list.querySelectorAll('.goals-row').forEach(r => r.classList.remove('goals-drag-over'));
+        });
+        row.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          if (row !== dragSrc) {
+            list.querySelectorAll('.goals-row').forEach(r => r.classList.remove('goals-drag-over'));
+            row.classList.add('goals-drag-over');
+          }
+        });
+        row.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          if (!dragSrc || dragSrc === row) return;
+          row.classList.remove('goals-drag-over');
+
+          // Reorder in DOM to determine new sequence
+          const rows = [...list.querySelectorAll('.goals-row')];
+          const srcIdx = rows.indexOf(dragSrc);
+          const tgtIdx = rows.indexOf(row);
+          if (srcIdx < tgtIdx) row.after(dragSrc); else row.before(dragSrc);
+
+          // Persist new sort_order for all goals
+          const reordered = [...list.querySelectorAll('.goals-row')];
+          await Promise.all(reordered.map((r, i) => {
+            const item = calendarItems.find(ci => ci.id === r.dataset.id);
+            if (!item) return Promise.resolve();
+            return fetch(`/calendar-items/${item.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...item, sort_order: i }),
+            });
+          }));
+          await loadData();
+        });
+
+        list.appendChild(row);
       });
     }
 
@@ -3514,6 +3723,12 @@
     document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+    document.querySelectorAll('#dEventPriority .seg-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#dEventPriority .seg-btn').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
       });
     });

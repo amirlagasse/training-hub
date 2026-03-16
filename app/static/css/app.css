@@ -161,9 +161,22 @@
       border-color: var(--line);
     }
 
+    [data-theme="dark"] .goals-row-alt { background: #0d1117; }
+    [data-theme="dark"] .goals-row:hover { background: rgba(83,155,245,0.08); }
+    [data-theme="dark"] .goals-row-alt:hover { background: rgba(83,155,245,0.10); }
+    [data-theme="dark"] .goals-drag-handle { color: var(--muted); }
+
     [data-theme="dark"] .goal-item p,
     [data-theme="dark"] .event-item p {
       color: var(--muted);
+    }
+
+    [data-theme="dark"] .ectl-label {
+      fill: var(--text);
+    }
+
+    [data-theme="dark"] .events-row-alt {
+      background: #0d1117;
     }
 
     [data-theme="dark"] .goal-btn,
@@ -818,6 +831,59 @@
       gap: 10px;
     }
 
+    /* Goals table */
+    .goals-header-row {
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+
+    .goals-row {
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      align-items: center;
+      padding: 7px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text);
+      transition: background 0.1s;
+    }
+
+    .goals-row:hover { background: rgba(31,91,215,0.05); }
+    .goals-row-alt { background: #f2f3f5; }
+    .goals-row-alt:hover { background: rgba(31,91,215,0.07); }
+    .goals-row.goals-dragging { opacity: 0.4; }
+    .goals-row.goals-drag-over { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+    .goals-col-date { font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap; }
+    .goals-date-cell { font-weight: 400; color: var(--muted); }
+
+    .goals-col-goal { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+    .goals-drag-handle {
+      color: var(--line);
+      font-size: 16px;
+      cursor: grab;
+      opacity: 0;
+      transition: opacity 0.15s;
+      flex-shrink: 0;
+      line-height: 1;
+      user-select: none;
+    }
+
+    .goals-row:hover .goals-drag-handle { opacity: 1; }
+
+    .goals-check { flex-shrink: 0; width: 15px; height: 15px; cursor: pointer; accent-color: var(--blue); }
+    .goals-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .goals-title-done { text-decoration: line-through; color: var(--muted); }
+    .goals-row-done .goals-date-cell { color: var(--muted); }
+
     .event-item,
     .goal-item {
       border: 1px solid #e0e8f3;
@@ -838,6 +904,113 @@
       margin: 0;
       color: #5a718a;
       font-size: 12px;
+    }
+
+    /* Featured event block */
+    .event-featured {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      padding: 4px 0 12px;
+    }
+
+    .event-date-badge {
+      flex-shrink: 0;
+      width: 64px;
+      background: #1f5bd7;
+      color: #fff;
+      text-align: center;
+      padding: 8px 4px 18px;
+      border-radius: 4px 4px 0 0;
+      clip-path: polygon(0 0, 100% 0, 100% 80%, 50% 100%, 0 80%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      line-height: 1;
+    }
+
+    .edb-month {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      opacity: 0.88;
+    }
+
+    .edb-day {
+      font-size: 28px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .event-featured-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-top: 4px;
+    }
+
+    .event-featured-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .event-countdown {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--blue);
+      letter-spacing: 0.3px;
+    }
+
+    /* CTL chart */
+    .event-ctl-chart-wrap {
+      margin: 4px 0 10px;
+    }
+
+    .event-ctl-chart {
+      display: block;
+      overflow: visible;
+    }
+
+    .ectl-label {
+      font-size: 11px;
+      fill: var(--text);
+      font-family: inherit;
+    }
+
+    /* Events list table */
+    .events-table {
+      border-top: 1px solid var(--line);
+      margin-top: 4px;
+    }
+
+    .events-row {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      padding: 7px 6px;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .events-row-alt {
+      background: var(--bg);
+    }
+
+    .events-row:hover {
+      background: rgba(31,91,215,0.06);
+    }
+
+    .events-row-date {
+      font-weight: 700;
+      min-width: 48px;
+      color: var(--text);
+    }
+
+    .events-row-title {
+      color: var(--text);
     }
 
     .list-item {

@@ -693,6 +693,12 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
 
     if kind == "event":
         item["event_type"] = str(payload.get("event_type", "Race")).strip() or "Race"
+        raw_priority = str(payload.get("priority", "C")).strip().upper()
+        item["priority"] = raw_priority if raw_priority in ("A", "B", "C") else "C"
+
+    if kind == "goal":
+        item["completed"] = bool(payload.get("completed", False))
+        item["sort_order"] = int(payload.get("sort_order", 0))
 
     if kind == "availability":
         item["availability"] = str(payload.get("availability", "Unavailable")).strip() or "Unavailable"
