@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260316g" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260316h" />
 </head>
 <body>
   <header class="top-nav">
@@ -63,13 +63,16 @@
         </aside>
 
         <section class="stack">
-          <div class="panel">
-            <h3 class="panel-title"><span>Today - Completed Workouts</span></h3>
-            <div id="todayDone"></div>
+          <div class="panel" style="padding:0;overflow:hidden;">
+            <h3 class="panel-title" style="padding:14px 16px 12px;margin:0;border-bottom:1px solid var(--line);">
+              <span>Today</span>
+              <button class="plus-btn" id="addTodayBtn">+</button>
+            </h3>
+            <div id="todayFeed"></div>
           </div>
-          <div class="panel">
-            <h3 class="panel-title"><span>Planned Workouts</span></h3>
-            <div id="todayPlanned"></div>
+          <div class="panel" id="trainingZonesPanel" style="display:none;">
+            <h3 class="panel-title" style="justify-content:center;"><span>Today's Training Zones</span></h3>
+            <div id="trainingZonesGrid"></div>
           </div>
         </section>
 
@@ -194,11 +197,18 @@
           </div>
           <div class="grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
             <div class="field"><label>Bike FTP (W)</label><input id="ftpRide" type="number" min="50" max="600" placeholder="--" /></div>
-            <div class="field"><label>Run FTP (optional)</label><input id="ftpRun" type="number" min="50" max="600" placeholder="--" /></div>
-          <div class="field"><label>Row FTP (W)</label><input id="ftpRow" type="number" min="50" max="600" placeholder="--" /></div>
-          <div class="field"><label>Swim FTP (optional)</label><input id="ftpSwim" type="number" min="50" max="600" placeholder="--" /></div>
-          <div class="field"><label>Strength FTP (optional)</label><input id="ftpStrength" type="number" min="50" max="600" placeholder="--" /></div>
-          <div class="field"><label>Other FTP</label><input id="ftpOther" type="number" min="50" max="600" placeholder="--" /></div>
+            <div class="field"><label>Run FTP (W)</label><input id="ftpRun" type="number" min="50" max="600" placeholder="--" /></div>
+            <div class="field"><label>Row FTP (W)</label><input id="ftpRow" type="number" min="50" max="600" placeholder="--" /></div>
+            <div class="field"><label>Swim FTP (W)</label><input id="ftpSwim" type="number" min="50" max="600" placeholder="--" /></div>
+            <div class="field"><label>Strength FTP (W)</label><input id="ftpStrength" type="number" min="50" max="600" placeholder="--" /></div>
+            <div class="field"><label>Other FTP (W)</label><input id="ftpOther" type="number" min="50" max="600" placeholder="--" /></div>
+          </div>
+          <h3 class="panel-title" style="margin:14px 0 6px;"><span>LTHR (Lactate Threshold Heart Rate)</span></h3>
+          <div class="grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+            <div class="field"><label>Bike LTHR (bpm)</label><input id="lthrRide" type="number" min="100" max="220" placeholder="--" /></div>
+            <div class="field"><label>Run LTHR (bpm)</label><input id="lthrRun" type="number" min="100" max="220" placeholder="--" /></div>
+            <div class="field"><label>Row LTHR (bpm)</label><input id="lthrRow" type="number" min="100" max="220" placeholder="--" /></div>
+            <div class="field"><label>Global LTHR (bpm)</label><input id="lthrGlobal" type="number" min="100" max="220" placeholder="--" /></div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
           <button class="btn primary" id="saveSettingsBtn">Save</button>
@@ -723,6 +733,6 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js?v=20260315h"></script>
+    <script src="/static/js/app.js?v=20260316h"></script>
 </body>
 </html>

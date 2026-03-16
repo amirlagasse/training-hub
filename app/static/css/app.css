@@ -640,6 +640,9 @@
     [data-theme="dark"] .ws-label-row span {
       color: var(--muted);
     }
+    [data-theme="dark"] .ws-label-row .ws-ctl { color: var(--blue); }
+    [data-theme="dark"] .ws-label-row .ws-atl { color: var(--pink); }
+    [data-theme="dark"] .ws-label-row .ws-tsb { color: var(--orange); }
 
     [data-theme="dark"] .ws-row {
       border-top-color: var(--line);
@@ -668,6 +671,11 @@
 
     [data-theme="dark"] .badge.done    { background: #0f3320; color: var(--good); }
     [data-theme="dark"] .badge.planned { background: #2a1a08; color: var(--planned); }
+
+    [data-theme="dark"] .today-card-green .today-card-sport  { background: #1a2e14; }
+    [data-theme="dark"] .today-card-yellow .today-card-sport { background: #2a2510; }
+    [data-theme="dark"] .today-card-orange .today-card-sport { background: #2a1d0f; }
+    [data-theme="dark"] .today-card-red .today-card-sport    { background: #2a1212; }
 
     [data-theme="light"] .theme-icon::before,
     :root:not([data-theme]) .theme-icon::before {
@@ -829,6 +837,172 @@
     .stack {
       display: grid;
       gap: 10px;
+    }
+
+    /* ── Today feed cards ── */
+    .today-card {
+      border-bottom: 1px solid var(--line);
+    }
+
+    .today-card-sport {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--bg);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .today-card-sport-planned { color: var(--muted); }
+
+    .today-card-stats {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      padding: 12px 16px;
+    }
+
+    .today-card-icon {
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+      opacity: 0.85;
+    }
+
+    .today-stat-big {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .today-stat-unit {
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--muted);
+    }
+
+    .today-card-metrics .today-card-sport { background: var(--bg); }
+
+    /* Completion quality states */
+    .today-card-green .today-card-sport  { background: #eef7e9; }
+    .today-card-yellow .today-card-sport { background: #fdf8e1; }
+    .today-card-orange .today-card-sport { background: #fdf1e2; }
+    .today-card-red .today-card-sport    { background: #fde9e9; }
+
+    .today-card-green .today-card-stats  { background: #6bbf4e; }
+    .today-card-yellow .today-card-stats { background: #e8c227; }
+    .today-card-orange .today-card-stats { background: #e87c2a; }
+    .today-card-red .today-card-stats    { background: #d94f4f; }
+
+    .today-card-green .today-card-stats .today-stat-big,
+    .today-card-yellow .today-card-stats .today-stat-big,
+    .today-card-orange .today-card-stats .today-stat-big,
+    .today-card-red .today-card-stats .today-stat-big { color: #fff; }
+
+    .today-card-green .today-card-stats .today-stat-unit,
+    .today-card-yellow .today-card-stats .today-stat-unit,
+    .today-card-orange .today-card-stats .today-stat-unit,
+    .today-card-red .today-card-stats .today-stat-unit { color: rgba(255,255,255,0.75); }
+
+    .today-card-green .today-card-icon,
+    .today-card-yellow .today-card-icon,
+    .today-card-orange .today-card-icon,
+    .today-card-red .today-card-icon { filter: brightness(0) invert(1); opacity: 0.9; }
+
+    .metrics-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .metrics-table tr:nth-child(even) { background: var(--bg); }
+
+    .metrics-key {
+      padding: 5px 16px;
+      color: var(--text);
+      width: 46%;
+    }
+
+    .metrics-val {
+      padding: 5px 8px;
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    /* ── Training zones ── */
+    .zones-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      align-items: start;
+    }
+
+    .zones-col { display: grid; gap: 24px; }
+
+    .zones-block { }
+
+    .zones-title {
+      font-size: 14px;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 2px;
+    }
+
+    .zones-title-power { color: #4a1a80; }
+    .zones-title-hr    { color: #a0306a; }
+
+    [data-theme="dark"] .zones-title-power { color: #b48af5; }
+    [data-theme="dark"] .zones-title-hr    { color: #f778ba; }
+
+    .zones-threshold {
+      font-size: 12px;
+      text-align: center;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .zones-rows { display: grid; gap: 3px; }
+
+    .zone-row {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .zone-row-hr {
+      justify-content: flex-end;
+    }
+
+    .zone-num {
+      font-weight: 700;
+      min-width: 14px;
+      text-align: right;
+      color: var(--muted);
+    }
+
+    .zone-name {
+      text-align: right;
+      color: var(--text);
+    }
+
+    .zone-bar-pip {
+      display: inline-block;
+      width: 4px;
+      height: 16px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .zone-range {
+      font-weight: 600;
+      min-width: 70px;
     }
 
     /* Goals table */

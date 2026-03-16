@@ -246,7 +246,7 @@ def default_settings() -> dict[str, Any]:
             "strength": None,
             "other": None,
         },
-        "lthr": {"run": None, "ride": None},
+        "lthr": {"run": None, "ride": None, "row": None, "global": None},
     }
 
 
