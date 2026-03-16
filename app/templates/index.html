@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260312a" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260315h" />
 </head>
 <body>
   <header class="top-nav">
@@ -22,8 +22,15 @@
     </nav>
     <div class="nav-right">
       <input id="uploadFitInput" type="file" accept=".fit" style="display:none;" />
-      <span>Amir LaGasse</span>
-      <button class="nav-settings" id="globalSettings" title="Settings">&#9881;</button>
+      <div class="account-wrap" id="accountWrap">
+        <button class="account-btn" id="accountMenuBtn" type="button" aria-label="Account menu">
+          <span class="account-icon" aria-hidden="true">&#128100;</span>
+          <span>Amelia Gas</span>
+        </button>
+        <div class="account-menu hidden" id="accountMenu">
+          <button id="accountSettingsBtn" type="button">Settings</button>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -124,7 +131,7 @@
           <span>FRI</span>
           <span>SAT</span>
           <span>SUN</span>
-          <span class="sum-head">WEEK SUMMARY</span>
+          <span class="sum-head">Summary</span>
         </div>
         <div id="calendarScroll" class="calendar-scroll"></div>
       </div>
@@ -614,7 +621,6 @@
       </div>
       <div class="modal-footer">
         <button class="btn ghost" id="deleteWorkoutView">Delete</button>
-        <button class="btn ghost" id="cancelWorkoutView">Cancel</button>
         <button class="btn secondary" id="saveWorkoutView">Save</button>
         <button class="btn primary" id="saveCloseWorkoutView">Save &amp; Close</button>
       </div>
@@ -657,6 +663,17 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js?v=20260312a"></script>
+  <div id="unsavedCloseConfirmModal" class="modal" style="z-index:113;">
+    <div class="delete-confirm-card">
+      <h3 class="delete-confirm-title">Discard unsaved changes?</h3>
+      <p class="delete-confirm-sub">This cannot be undone.</p>
+      <div class="delete-confirm-btns">
+        <button class="delete-cancel-btn" id="unsavedCloseCancel">Cancel</button>
+        <button class="delete-action-btn" id="unsavedCloseDiscard">Discard</button>
+      </div>
+    </div>
+  </div>
+
+    <script src="/static/js/app.js?v=20260315h"></script>
 </body>
 </html>

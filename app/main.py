@@ -831,6 +831,7 @@ def ui_activities() -> list[dict[str, Any]]:
             "planned_avg_speed",
             "planned_calories",
             "planned_work_kj",
+            "completed_duration_min",
         ]:
             if k in override:
                 updated[k] = override[k]
@@ -1091,6 +1092,7 @@ def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) 
         "planned_avg_speed",
         "planned_calories",
         "planned_work_kj",
+        "completed_duration_min",
     ]:
         if key in payload:
             current[key] = _as_float(payload.get(key))

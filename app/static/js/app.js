@@ -2,6 +2,7 @@
     let _deleteConfirmResolver = null;
     let _applyConfirmResolver = null;
     let _commentDeleteResolver = null;
+    let _unsavedCloseResolver = null;
     function confirmDelete({ message = 'This cannot be undone.', onConfirm } = {}) {
       const modal = document.getElementById('deleteConfirmModal');
       const subtitle = document.getElementById('deleteConfirmSub');
@@ -34,6 +35,15 @@
         _commentDeleteResolver = (ok) => {
           resolve(Boolean(ok));
         };
+      });
+    }
+
+    function confirmUnsavedClose() {
+      const modal = document.getElementById('unsavedCloseConfirmModal');
+      if (!modal) return Promise.resolve('cancel');
+      modal.classList.add('open');
+      return new Promise((resolve) => {
+        _unsavedCloseResolver = (choice) => resolve(choice || 'cancel');
       });
     }
 
@@ -367,6 +377,12 @@
       return estimateTss(Number(activity.moving_time || 0) / 60, intensityByType(activity.type || 'Other'));
     }
 
+    function completedDurationMinValue(obj) {
+      const overrideMin = Number(obj && obj.completed_duration_min);
+      if (Number.isFinite(overrideMin) && overrideMin >= 0) return overrideMin;
+      return Number(obj && obj.moving_time || 0) / 60;
+    }
+
     function itemToTss(item) {
       if (item.kind !== 'workout') return 0;
       const plannedTss = Number(item.planned_tss || 0);
@@ -389,7 +405,7 @@
       const ifv = Number(obj.if_value || obj.completed_if || 0);
       if (ifv > 0) return ifv;
       const tss = Number(obj.tss_override || obj.completed_tss || 0);
-      const hours = Number(obj.moving_time || (Number(obj.completed_duration_min || 0) * 60) || 0) / 3600;
+      const hours = completedDurationMinValue(obj) / 60;
       if (tss > 0 && hours > 0) return Math.sqrt(tss / (hours * 100));
       const ftp = ftpForActivity(obj);
       const avgP = Number(obj.avg_power || 0);
@@ -407,6 +423,13 @@
 
     function pairForStrava(stravaId) {
       return pairs.find(p => p.strava_id === String(stravaId)) || null;
+    }
+
+    function hasPlannedAndCompletedContent(workout) {
+      if (!workout || workout.kind !== 'workout') return false;
+      const hasPlanned = ['duration', 'distance', 'tss'].some((basis) => plannedMetric(workout, basis) > 0);
+      const hasCompleted = !!completedFromPlanned(workout);
+      return hasPlanned && hasCompleted;
     }
 
     function plannedMetric(plannedItem, basis) {
@@ -436,11 +459,11 @@
         const override = Number(completedItem.tss_override || 0);
         if (override > 0) return override;
         const ifv = Number(completedItem.if_value || 0);
-        const h = Number(completedItem.moving_time || 0) / 3600;
+        const h = completedDurationMinValue(completedItem) / 60;
         if (ifv > 0 && h > 0) return h * ifv * ifv * 100;
         return activityToTss(completedItem);
       }
-      return Number(completedItem.moving_time || 0) / 60;
+      return completedDurationMinValue(completedItem);
     }
 
     function complianceStatus(plannedItem, completedItem, dayKey) {
@@ -473,6 +496,7 @@
 
     function modalStatusClass(payload) {
       if (!payload) return 'status-gray';
+      if (payload.isDraft) return 'status-gray';
       const planned = payload.planned || (payload.source === 'planned' ? payload.data : null);
       const data = payload.data || {};
       const key = planned ? String(planned.date || '') : (data.start_date_local ? dateKeyFromDate(new Date(data.start_date_local)) : todayKey());
@@ -907,7 +931,7 @@
           map[key] = { done: [], items: [], durationMin: 0, tss: 0 };
         }
         map[key].done.push(a);
-        map[key].durationMin += Number(a.moving_time || 0) / 60;
+        map[key].durationMin += completedDurationMinValue(a);
         map[key].tss += activityToTss(a);
       });
 
@@ -1085,6 +1109,60 @@
         return;
       }
       label.textContent = String(slider.value || '--');
+    }
+
+    function workoutDraftSnapshot() {
+      const val = (id) => {
+        const node = document.getElementById(id);
+        return node ? String(node.value || '').trim() : '';
+      };
+      return {
+        title: val('wvTitle'),
+        description: val('wvDescription'),
+        sportType: modalDraft ? String(modalDraft.sportType || '') : '',
+        feel: Number(currentFeel || 0),
+        rpeTouched: !!(modalDraft && modalDraft.rpeTouched),
+        rpeValue: val('wvRpe'),
+        distanceUnit: val('pcDistanceUnit'),
+        elevationUnit: val('pcElevationUnit'),
+        commentsFeed: modalDraft ? JSON.stringify(modalDraft.commentsFeed || []) : '[]',
+        pendingDeleteFit: !!(modalDraft && modalDraft.pendingDeleteFit),
+        uploadedNow: !!(modalDraft && modalDraft.uploadedNow),
+        fields: {
+          pcDurPlan: val('pcDurPlan'),
+          pcDurComp: val('pcDurComp'),
+          pcDistPlan: val('pcDistPlan'),
+          pcDistComp: val('pcDistComp'),
+          pcAvgSpeedPlan: val('pcAvgSpeedPlan'),
+          pcAvgSpeedComp: val('pcAvgSpeedComp'),
+          pcCaloriesPlan: val('pcCaloriesPlan'),
+          pcCaloriesComp: val('pcCaloriesComp'),
+          pcElevPlan: val('pcElevPlan'),
+          pcElevComp: val('pcElevComp'),
+          pcTssPlan: val('pcTssPlan'),
+          pcTssComp: val('pcTssComp'),
+          pcIfPlan: val('pcIfPlan'),
+          pcIfComp: val('pcIfComp'),
+          pcNpComp: val('pcNpComp'),
+          pcWorkPlan: val('pcWorkPlan'),
+          pcWorkComp: val('pcWorkComp'),
+          wvHrMin: val('wvHrMin'),
+          wvHrAvg: val('wvHrAvg'),
+          wvHrMax: val('wvHrMax'),
+          wvPowerMin: val('wvPowerMin'),
+          wvPowerAvg: val('wvPowerAvg'),
+          wvPowerMax: val('wvPowerMax'),
+        },
+      };
+    }
+
+    function hasUnsavedWorkoutChanges() {
+      if (!window.currentWorkoutPayload || !modalDraft) return false;
+      if (analyzeState && analyzeState.pendingDirty) return true;
+      const start = modalDraft.initialSnapshot;
+      if (!start) return false;
+      const now = workoutDraftSnapshot();
+      return JSON.stringify(start) !== JSON.stringify(now);
     }
 
     function setWorkoutMode(mode) {
@@ -1290,6 +1368,7 @@
       document.getElementById('wvFilesTabBtn').classList.remove('active');
       document.getElementById('wvSportMenu').classList.add('hidden');
       applyModalHeaderTint(payload);
+      modalDraft.initialSnapshot = workoutDraftSnapshot();
       document.getElementById('workoutViewModal').classList.add('open');
     }
 
@@ -1540,7 +1619,12 @@
     }
 
     async function handleSave() {
-      await persistWorkoutView();
+      const result = await persistWorkoutView();
+      if (result && result.saved && modalDraft) {
+        modalDraft.pendingDeleteFit = false;
+        modalDraft.uploadedNow = false;
+        modalDraft.initialSnapshot = workoutDraftSnapshot();
+      }
     }
 
     async function handleSaveAndClose() {
@@ -1589,7 +1673,7 @@
       const parentPlanned = payload.planned || null;
       const explicitCompleted = parentPlanned ? completedFromPlanned(parentPlanned) : completedFromPlanned(data);
       const completedDurationMin = payload.source === 'strava'
-        ? Number(data.moving_time || 0) / 60
+        ? completedDurationMinValue(data)
         : explicitCompleted ? Number(explicitCompleted.moving_time || 0) / 60 : 0;
       const completedDistanceM = payload.source === 'strava'
         ? Number(data.distance || 0)
@@ -2022,6 +2106,13 @@
         analyzeState.pendingCuts = [];
         recomputeCutState();
         const eff = effectivePoints();
+        const lapDurationSec = (lapRows || []).reduce((sum, lap) => {
+          const startSec = Math.max(0, timeToSec(lap.start || series[0].timestamp, baseMs));
+          const endSec = Math.max(startSec + 1, timeToSec(lap.end || series[series.length - 1].timestamp, baseMs));
+          return sum + lapKeptDuration(startSec, endSec);
+        }, 0);
+        const effectiveDurationSec = Math.max(0, lapDurationSec || (eff.length ? eff[eff.length - 1].dT : 0));
+        const effectiveDurationMin = effectiveDurationSec / 60;
         analyzeState.wStart = 0;
         analyzeState.wEnd = Math.max(1, (eff.length ? eff[eff.length - 1].dT : totalSec));
         const edits = {
@@ -2029,25 +2120,31 @@
           cuts: mergedCuts.map((c) => ({ startSec: c.startSec, endSec: c.endSec })),
         };
         if (payload.planned && payload.planned.id) {
-          const body = { ...payload.planned, analysis_edits: edits };
+          const body = { ...payload.planned, analysis_edits: edits, completed_duration_min: effectiveDurationMin };
           await fetch(`/calendar-items/${payload.planned.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
           });
           payload.planned.analysis_edits = edits;
+          payload.planned.completed_duration_min = effectiveDurationMin;
+          if (payload.data) payload.data.completed_duration_min = effectiveDurationMin;
         } else if (payload.source === 'strava' && payload.data && payload.data.id) {
           await fetch(`/activities/${payload.data.id}/meta`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ analysis_edits: edits }),
+            body: JSON.stringify({ analysis_edits: edits, completed_duration_min: effectiveDurationMin }),
           });
           payload.data.analysis_edits = edits;
+          payload.data.completed_duration_min = effectiveDurationMin;
+          payload.data.moving_time = effectiveDurationSec;
         }
         analyzeState.persistedDeleted = new Set(edits.deletedChannels);
         analyzeState.persistedCuts = edits.cuts.map((c) => ({ ...c }));
         syncPendingState();
         renderLapRows();
+        renderWorkoutSummary(payload);
+        if (modalDraft) modalDraft.initialSnapshot = workoutDraftSnapshot();
         renderMain();
       }
 
@@ -2136,25 +2233,45 @@
       }
 
       function statsForRange(startT, endT) {
-        const eff = effectivePoints();
-        const win = eff.filter((p) => p.dT >= startT && p.dT <= endT);
-        const duration = Math.max(1, endT - startT);
-        const effectiveTotal = Math.max(1, (eff.length ? eff[eff.length - 1].dT : totalSec));
+        const rangeStartOrig = originalFromDisplay(Math.min(startT, endT));
+        const rangeEndOrig = originalFromDisplay(Math.max(startT, endT));
+        const activeCuts = normalizeCuts([...(analyzeState.workCuts || []), ...(analyzeState.pendingCuts || [])]);
+        const globalKept = [];
+        let cursor = 0;
+        activeCuts.forEach((c) => {
+          if (c.startSec > cursor) globalKept.push({ startSec: cursor, endSec: c.startSec });
+          cursor = Math.max(cursor, c.endSec);
+        });
+        if (cursor < totalSec) globalKept.push({ startSec: cursor, endSec: totalSec });
+        const selectedKept = [];
+        globalKept.forEach((seg) => {
+          const s = Math.max(seg.startSec, rangeStartOrig);
+          const e = Math.min(seg.endSec, rangeEndOrig);
+          if (e > s) selectedKept.push({ startSec: s, endSec: e });
+        });
+        const selectedPts = pts.filter((p) => selectedKept.some((r) => p.t >= r.startSec && p.t <= r.endSec));
+        const duration = selectedKept.reduce((sum, r) => sum + Math.max(0, r.endSec - r.startSec), 0);
+        const effectiveTotal = globalKept.reduce((sum, r) => sum + Math.max(0, r.endSec - r.startSec), 0) || 1;
         const frac = duration / effectiveTotal;
-        const dVals = win.map((p) => p.distance).filter((v) => v !== null);
-        const distance = dVals.length > 1 ? Math.max(0, dVals[dVals.length - 1] - dVals[0]) : (Number(summary.distance_m || 0) * frac);
+        const distance = selectedKept.reduce((sum, r) => {
+          const seg = pts.filter((p) => p.t >= r.startSec && p.t <= r.endSec && p.distance !== null);
+          if (seg.length > 1) {
+            return sum + Math.max(0, seg[seg.length - 1].distance - seg[0].distance);
+          }
+          return sum;
+        }, 0);
         const totalTss = Number(summary.tss || data.tss_override || activityToTss(data) || 0);
         const tss = totalTss > 0 ? (totalTss * frac) : null;
         const minVal = (k) => {
-          const vals = win.map((p) => p[k]).filter((v) => v !== null);
+          const vals = selectedPts.map((p) => p[k]).filter((v) => v !== null);
           return vals.length ? Math.min(...vals) : null;
         };
         const mean = (k) => {
-          const vals = win.map((p) => p[k]).filter((v) => v !== null);
+          const vals = selectedPts.map((p) => p[k]).filter((v) => v !== null);
           return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
         };
         const maxVal = (k) => {
-          const vals = win.map((p) => p[k]).filter((v) => v !== null);
+          const vals = selectedPts.map((p) => p[k]).filter((v) => v !== null);
           return vals.length ? Math.max(...vals) : null;
         };
         return { duration, distance, tss, minVal, mean, maxVal };
@@ -2167,7 +2284,7 @@
         if (!validRanges.length) {
           return statsForRange(analyzeState.wStart, analyzeState.wEnd);
         }
-        const intervalPoints = (startSec, endSec) => pts.filter((p) => p.t >= startSec && p.t <= endSec && !inCut(p.t, false));
+        const intervalPoints = (startSec, endSec) => pts.filter((p) => p.t >= startSec && p.t <= endSec && !inCut(p.t));
         const duration = validRanges.reduce((sum, r) => sum + lapKeptDuration(r.startSec, r.endSec), 0);
         const distance = validRanges.reduce((sum, r) => {
           const seg = intervalPoints(r.startSec, r.endSec);
@@ -2176,9 +2293,9 @@
           }
           return sum;
         }, 0);
-        const selectedPts = pts.filter((p) => !inCut(p.t, false) && validRanges.some((r) => p.t >= r.startSec && p.t <= r.endSec));
-        const eff = effectivePoints();
-        const effectiveTotal = Math.max(1, (eff.length ? eff[eff.length - 1].dT : totalSec));
+        const selectedPts = pts.filter((p) => !inCut(p.t) && validRanges.some((r) => p.t >= r.startSec && p.t <= r.endSec));
+        const activeCuts = normalizeCuts([...(analyzeState.workCuts || []), ...(analyzeState.pendingCuts || [])]);
+        const effectiveTotal = Math.max(1, totalSec - activeCuts.reduce((sum, c) => sum + Math.max(0, c.endSec - c.startSec), 0));
         const frac = Math.max(0, duration) / effectiveTotal;
         const totalTss = Number(summary.tss || data.tss_override || activityToTss(data) || 0);
         const tss = totalTss > 0 ? (totalTss * frac) : null;
@@ -2194,17 +2311,13 @@
           const vals = selectedPts.map((p) => p[k]).filter((v) => v !== null);
           return vals.length ? Math.max(...vals) : null;
         };
-        return { duration: Math.max(1, duration), distance, tss, minVal, mean, maxVal };
+        return { duration: Math.max(0, duration), distance, tss, minVal, mean, maxVal };
       }
 
       function renderSelectionStats() {
         const sel = analyzeState.selection;
         const hasLapSelection = analyzeState.selectionMode === 'laps' && Array.isArray(analyzeState.lapHighlightRanges) && analyzeState.lapHighlightRanges.length > 0;
-        const eff = effectivePoints();
-        const effectiveTotal = Math.max(1, (eff.length ? eff[eff.length - 1].dT : totalSec));
-        const isZoomed = analyzeState.wStart > 0 || analyzeState.wEnd < effectiveTotal;
-        const cutFocused = analyzeState.startTrim > 0 || analyzeState.endTrim < totalSec;
-        if (selectionTitle) selectionTitle.textContent = (sel || hasLapSelection || isZoomed || cutFocused) ? 'Selection' : 'Entire Workout';
+        if (selectionTitle) selectionTitle.textContent = (sel || hasLapSelection) ? 'Selection' : 'Entire Workout';
         let stats;
         if (sel && analyzeState.selectionMode === 'graph') {
           const startT = Math.min(sel.start, sel.end);
@@ -2213,7 +2326,15 @@
         } else if (hasLapSelection) {
           stats = statsForDiscreteRanges(analyzeState.lapHighlightRanges);
         } else {
-          stats = statsForRange(analyzeState.wStart, analyzeState.wEnd);
+          const activeCuts = normalizeCuts([...(analyzeState.workCuts || []), ...(analyzeState.pendingCuts || [])]);
+          const kept = [];
+          let cursor = 0;
+          activeCuts.forEach((c) => {
+            if (c.startSec > cursor) kept.push({ startSec: cursor, endSec: c.startSec });
+            cursor = Math.max(cursor, c.endSec);
+          });
+          if (cursor < totalSec) kept.push({ startSec: cursor, endSec: totalSec });
+          stats = statsForDiscreteRanges(kept);
         }
         const {
           duration, distance, tss, minVal, mean, maxVal,
@@ -2665,7 +2786,8 @@
       }
       function lapKeptDuration(startSec, endSec) {
         let kept = Math.max(0, endSec - startSec);
-        analyzeState.workCuts.forEach((c) => {
+        const activeCuts = normalizeCuts([...(analyzeState.workCuts || []), ...(analyzeState.pendingCuts || [])]);
+        activeCuts.forEach((c) => {
           kept -= overlap(startSec, endSec, c.startSec, c.endSec);
         });
         return Math.max(0, kept);
@@ -2703,6 +2825,7 @@
           const endSec = Math.max(startSec + 1, timeToSec(lap.end || series[series.length - 1].timestamp, baseMs));
           const keptPts = pts.filter((p) => p.t >= startSec && p.t <= endSec && !inCut(p.t, false));
           const dur = lapKeptDuration(startSec, endSec);
+          if (dur <= 0) return;
           const ifVal = Number(lap.if || lap.intensity_factor || 0) || null;
           const dist = keptPts.length > 1 && keptPts[0].distance != null && keptPts[keptPts.length - 1].distance != null
             ? Math.max(0, keptPts[keptPts.length - 1].distance - keptPts[0].distance)
@@ -2923,6 +3046,10 @@
         row.dataset.weekMonth = monthKey(weekMid.getFullYear(), weekMid.getMonth());
         row.dataset.weekLabel = weekMid.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
         row.dataset.weekStart = dateKeyFromDate(weekStart);
+        const rowEnd = new Date(weekStart);
+        rowEnd.setDate(weekStart.getDate() + 6);
+        const t = parseDateKey(todayKey());
+        if (t >= weekStart && t <= rowEnd) row.classList.add('week-current');
 
         for (let col = 0; col < 7; col += 1) {
           const dayDate = new Date(weekStart);
@@ -2938,8 +3065,11 @@
 
           const num = document.createElement('span');
           num.className = 'd-num';
-          num.textContent = String(dayDate.getDate());
-          cell.appendChild(num);
+          num.textContent = key === todayKey() ? `Today ${dayDate.getDate()}` : String(dayDate.getDate());
+          const dayHead = document.createElement('div');
+          dayHead.className = 'day-head';
+          dayHead.appendChild(num);
+          cell.appendChild(dayHead);
 
           const entries = dayMap[key] || { done: [], items: [] };
           const shownCompleted = new Set();
@@ -2987,7 +3117,9 @@
               card.className = `work-card ${comp.cls}`;
               const unitForCard = String(item.distance_unit || distanceUnit || 'km');
               const plannedDistM = Number(item.distance_m || (Number(item.distance_km || 0) * 1000));
-              const durMin = completed ? Number(completed.moving_time || 0) / 60 : Number(item.duration_min || 0);
+              const durMin = completed
+                ? completedDurationMinValue(completed)
+                : Number(item.duration_min || 0);
               const distM = completed ? Number(completed.distance || 0) : plannedDistM;
               const tssVal = completed
                 ? Math.round(Number(completed.tss_override || 0) || activityToTss(completed))
@@ -3052,7 +3184,7 @@
             const feedCount = commentCount(a);
             const feedback = `${feelEmoji(a.feel)} ${Number(a.rpe || 0) > 0 ? a.rpe : ''}`.trim();
             const commentsText = feedCount > 0 ? `💬 x${feedCount}` : '💬';
-            const cDur = Number(a.moving_time || 0) / 60;
+            const cDur = completedDurationMinValue(a);
             const cDist = Number(a.distance || 0);
             const cTss = Math.round(activityToTss(a));
             const metricParts = [];
@@ -3070,7 +3202,11 @@
               const raw = ev.dataTransfer.getData('text/plain');
               if (!raw) return;
               const dragData = JSON.parse(raw);
-              if (dragData.source === 'planned') await pairWorkouts(String(dragData.id), String(a.id));
+              if (dragData.source === 'planned') {
+                const draggedPlanned = calendarItems.find((i) => String(i.id) === String(dragData.id));
+                if (compStat === 'unplanned' && hasPlannedAndCompletedContent(draggedPlanned)) return;
+                await pairWorkouts(String(dragData.id), String(a.id));
+              }
             });
             card.addEventListener('click', (ev) => {
               ev.stopPropagation();
@@ -3106,7 +3242,7 @@
         const week = getWeekMetrics(weekDateKeys, dayMap);
         const weekCard = document.createElement('div');
         weekCard.className = 'week-summary';
-        weekCard.innerHTML = `<div class="ws-metrics"><div class="ws-chip ws-ctl"><strong>${week.ctl}</strong>CTL</div><div class="ws-chip ws-atl"><strong>${week.atl}</strong>ATL</div><div class="ws-chip ws-tsb"><strong>${week.tsb > 0 ? '+' + week.tsb : week.tsb}</strong>TSB</div></div><div class="ws-row"><span>Total Duration</span><strong>${week.durationLabel}</strong></div><div class="ws-row"><span>Total TSS</span><strong>${week.tss}</strong></div>`;
+        weekCard.innerHTML = `<div class="ws-metrics"><div class="ws-label-row"><span class="ws-ctl">Fitness</span><span class="ws-atl">Fatigue</span><span class="ws-tsb">Form</span></div><div class="ws-value-row"><span class="ws-ctl">${week.ctl} CTL</span><span class="ws-atl">${week.atl} ATL</span><span class="ws-tsb">${week.tsb > 0 ? '+' + week.tsb : week.tsb} TSB</span></div></div><div class="ws-row"><span>Total Duration</span><strong>${week.durationLabel}</strong></div><div class="ws-row"><span>Total TSS</span><strong>${week.tss}</strong></div>`;
         row.appendChild(weekCard);
         grid.appendChild(row);
         weekRows.push(row);
@@ -3363,9 +3499,18 @@
       fitUploadContext = 'global';
       await loadData();
     });
-    document.getElementById('globalSettings').addEventListener('click', () => {
-      document.getElementById('settingsModal').classList.add('open');
-    });
+    const accountBtn = document.getElementById('accountMenuBtn');
+    const accountMenu = document.getElementById('accountMenu');
+    if (accountBtn && accountMenu) {
+      accountBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        accountMenu.classList.toggle('hidden');
+      });
+      document.getElementById('accountSettingsBtn').addEventListener('click', () => {
+        accountMenu.classList.add('hidden');
+        document.getElementById('settingsModal').classList.add('open');
+      });
+    }
     document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((b) => b.classList.remove('active'));
@@ -3394,13 +3539,26 @@
       if (event.target.id === 'detailModal') closeDetailModal();
     });
 
-    document.getElementById('closeWorkoutView').addEventListener('click', async () => {
-      if (analyzeState && analyzeState.pendingDirty && typeof analyzeState.cancelPending === 'function') {
-        analyzeState.cancelPending();
+    async function closeWorkoutWithUnsavedFlow() {
+      if (!window.currentWorkoutPayload) {
+        await closeWorkoutModal(false);
+        return;
       }
-      await closeWorkoutModal(true);
-    });
-    document.getElementById('cancelWorkoutView').addEventListener('click', async () => { await closeWorkoutModal(true); });
+      if (!hasUnsavedWorkoutChanges()) {
+        await handleSaveAndClose();
+        return;
+      }
+      const choice = await confirmUnsavedClose();
+      if (choice === 'discard') {
+        if (analyzeState && analyzeState.pendingDirty && typeof analyzeState.cancelPending === 'function') {
+          analyzeState.cancelPending();
+        }
+        await closeWorkoutModal(true);
+        await loadData();
+      }
+    }
+
+    document.getElementById('closeWorkoutView').addEventListener('click', closeWorkoutWithUnsavedFlow);
     document.getElementById('saveWorkoutView').addEventListener('click', handleSave);
     document.getElementById('saveCloseWorkoutView').addEventListener('click', handleSaveAndClose);
     document.getElementById('deleteWorkoutView').addEventListener('click', () => {
@@ -3517,7 +3675,7 @@
     });
     document.getElementById('workoutViewModal').addEventListener('click', (event) => {
       if (event.target.id === 'workoutViewModal') {
-        closeWorkoutModal(true);
+        closeWorkoutWithUnsavedFlow();
       }
     });
     document.getElementById('contextMenu').addEventListener('click', (ev) => ev.stopPropagation());
@@ -3528,6 +3686,9 @@
       }
       if (!ev.target.closest('.card-menu-btn') && !ev.target.closest('#contextMenu')) {
         closeContextMenu();
+      }
+      if (!ev.target.closest('#accountWrap') && accountMenu) {
+        accountMenu.classList.add('hidden');
       }
     });
     document.getElementById('calTodayBtn').addEventListener('click', jumpToCurrentMonth);
@@ -3612,6 +3773,34 @@
           const resolver = _commentDeleteResolver;
           _commentDeleteResolver = null;
           resolver(false);
+        }
+      }
+    });
+
+    // ── Unsaved-close confirm modal wiring ──
+    document.getElementById('unsavedCloseCancel').addEventListener('click', () => {
+      document.getElementById('unsavedCloseConfirmModal').classList.remove('open');
+      if (_unsavedCloseResolver) {
+        const resolver = _unsavedCloseResolver;
+        _unsavedCloseResolver = null;
+        resolver('cancel');
+      }
+    });
+    document.getElementById('unsavedCloseDiscard').addEventListener('click', () => {
+      document.getElementById('unsavedCloseConfirmModal').classList.remove('open');
+      if (_unsavedCloseResolver) {
+        const resolver = _unsavedCloseResolver;
+        _unsavedCloseResolver = null;
+        resolver('discard');
+      }
+    });
+    document.getElementById('unsavedCloseConfirmModal').addEventListener('click', (ev) => {
+      if (ev.target.id === 'unsavedCloseConfirmModal') {
+        document.getElementById('unsavedCloseConfirmModal').classList.remove('open');
+        if (_unsavedCloseResolver) {
+          const resolver = _unsavedCloseResolver;
+          _unsavedCloseResolver = null;
+          resolver('cancel');
         }
       }
     });
