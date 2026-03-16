@@ -3518,7 +3518,11 @@
           const entries = dayMap[key] || { done: [], items: [] };
           const shownCompleted = new Set();
           const cardsToShow = [];
+          // Group all goals for the day into a single card
+          const goalItems = entries.items.filter(i => i.kind === 'goal');
+          if (goalItems.length > 0) cardsToShow.push({ kind: 'goal-group', items: goalItems });
           entries.items.forEach((item) => {
+            if (item.kind === 'goal') return; // already handled above
             if (item.kind !== 'workout') {
               cardsToShow.push({ kind: 'other', item });
               return;
@@ -3536,11 +3540,71 @@
           });
 
           cardsToShow.slice(0, 6).forEach((entry) => {
+            if (entry.kind === 'goal-group') {
+              const items = entry.items;
+              const card = document.createElement('div');
+              card.className = 'work-card goal';
+              const bullets = items.map(g =>
+                `<li class="wc-goal-item${g.completed ? ' wc-goal-done' : ''}">${g.title || 'Goal'}</li>`
+              ).join('');
+              card.innerHTML = `
+                <button class="card-menu-btn" type="button">&#8942;</button>
+                <div class="wc-kind-head wc-kind-goal"><span class="wc-kind-icon">&#9745;</span> Goals</div>
+                <ul class="wc-goal-list">${bullets}</ul>`;
+              card.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                selectedKind = 'goal'; selectedDate = items[0].date;
+                openDetailModal(items[0]);
+              });
+              card.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'planned', data: items[0] }));
+              card.querySelector('.card-menu-btn').addEventListener('click', (ev) => showItemMenu(ev, { source: 'planned', data: items[0] }));
+              cell.appendChild(card);
+              return;
+            }
             if (entry.kind === 'other') {
               const item = entry.item;
               const card = document.createElement('div');
               card.className = `work-card ${item.kind}`;
-              card.innerHTML = `<button class="card-menu-btn" type="button">&#8942;</button><p class="wc-title">${item.title || item.kind.toUpperCase()}</p><p class="wc-meta">${item.kind.toUpperCase()} • ${item.date}</p>`;
+
+              if (item.kind === 'event') {
+                const d = new Date(item.date + 'T00:00:00');
+                const month = d.toLocaleString('en', { month: 'short' }).toUpperCase();
+                const day = d.getDate();
+                const daysUntil = Math.round((d - new Date(todayKey() + 'T00:00:00')) / 86400000);
+                const countdown = daysUntil > 0 ? `${daysUntil} DAY${daysUntil !== 1 ? 'S' : ''} UNTIL EVENT`
+                  : daysUntil === 0 ? 'EVENT TODAY'
+                  : `${Math.abs(daysUntil)} DAY${Math.abs(daysUntil) !== 1 ? 'S' : ''} AGO`;
+                const priorityBadge = item.priority && item.priority !== 'C'
+                  ? `<span class="wc-priority-badge wc-priority-${item.priority}">${item.priority}</span>` : '';
+                card.innerHTML = `
+                  <button class="card-menu-btn" type="button">&#8942;</button>
+                  <div class="wc-event-layout">
+                    <div class="wc-event-badge"><span class="wc-event-month">${month}</span><span class="wc-event-day">${day}</span></div>
+                    <div class="wc-event-info">
+                      <p class="wc-event-countdown">${countdown}</p>
+                      <p class="wc-event-name">${item.title || 'Event'}${priorityBadge}</p>
+                    </div>
+                  </div>`;
+              } else if (item.kind === 'metrics') {
+                const lines = (item.description || '').split('\n').map(l => l.trim()).filter(Boolean);
+                const preview = lines[0] || item.title || 'Metrics';
+                const more = lines.length > 1 ? `<p class="wc-more">${lines.length - 1} more…</p>` : '';
+                card.innerHTML = `
+                  <button class="card-menu-btn" type="button">&#8942;</button>
+                  <div class="wc-kind-head wc-kind-metrics"><span class="wc-kind-icon">&#9883;</span> ${item.title || 'Metrics'}</div>
+                  <p class="wc-meta wc-metrics-preview">${preview}</p>${more}`;
+              } else if (item.kind === 'note') {
+                const preview = (item.description || item.title || '').substring(0, 60);
+                card.innerHTML = `
+                  <button class="card-menu-btn" type="button">&#8942;</button>
+                  <div class="wc-kind-head wc-kind-note"><span class="wc-kind-icon">&#9998;</span> Note</div>
+                  <p class="wc-meta">${preview}${preview.length === 60 ? '…' : ''}</p>`;
+              } else {
+                card.innerHTML = `
+                  <button class="card-menu-btn" type="button">&#8942;</button>
+                  <p class="wc-title">${item.title || item.kind}</p>`;
+              }
+
               card.addEventListener('click', (ev) => {
                 ev.stopPropagation();
                 selectedKind = item.kind;
@@ -3581,10 +3645,20 @@
               card.draggable = true;
               card.dataset.kind = 'planned';
               card.dataset.plannedId = String(item.id);
-              card.addEventListener('dragstart', (ev) => ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'planned', id: String(item.id) })));
+              card.addEventListener('dragstart', (ev) => {
+                ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'planned', id: String(item.id) }));
+                card.classList.add('dragging-active');
+              });
+              card.addEventListener('dragend', () => card.classList.remove('dragging-active'));
               card.addEventListener('dragover', (ev) => ev.preventDefault());
+              card.addEventListener('dragenter', (ev) => {
+                ev.preventDefault();
+                if (!completed) card.classList.add('drop-target');
+              });
+              card.addEventListener('dragleave', () => card.classList.remove('drop-target'));
               card.addEventListener('drop', async (ev) => {
                 ev.preventDefault();
+                card.classList.remove('drop-target');
                 const raw = ev.dataTransfer.getData('text/plain');
                 if (!raw) return;
                 const dragData = JSON.parse(raw);
@@ -3639,10 +3713,20 @@
             card.draggable = true;
             card.dataset.kind = 'strava';
             card.dataset.stravaId = String(a.id);
-            card.addEventListener('dragstart', (ev) => ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'strava', id: String(a.id) })));
+            card.addEventListener('dragstart', (ev) => {
+              ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'strava', id: String(a.id) }));
+              card.classList.add('dragging-active');
+            });
+            card.addEventListener('dragend', () => card.classList.remove('dragging-active'));
             card.addEventListener('dragover', (ev) => ev.preventDefault());
+            card.addEventListener('dragenter', (ev) => {
+              ev.preventDefault();
+              card.classList.add('drop-target');
+            });
+            card.addEventListener('dragleave', () => card.classList.remove('drop-target'));
             card.addEventListener('drop', async (ev) => {
               ev.preventDefault();
+              card.classList.remove('drop-target');
               const raw = ev.dataTransfer.getData('text/plain');
               if (!raw) return;
               const dragData = JSON.parse(raw);
