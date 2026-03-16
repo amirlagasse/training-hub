@@ -2,7 +2,9 @@
 .env
 __pycache__
 *.sqlite
-
+.DS_Store
+**/.DS_Store
+CLAUDE.md
 # App runtime/generated data (local only)
 data/
 icons_debug/

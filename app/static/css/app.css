@@ -19,6 +19,24 @@
       --radius: 12px;
     }
 
+    /* Dark mode color scheme */
+    [data-theme="dark"] {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --line: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --nav: #0d1117;
+      --top-nav-blue-solid: #0d1117;
+      --top-nav-blue-old: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
+      --blue: #539bf5;
+      --pink: #f778ba;
+      --orange: #ff8c42;
+      --good: #3fb950;
+      --planned: #d29922;
+      --shadow: 0 12px 26px rgba(0, 0, 0, 0.5);
+    }
+
     * { box-sizing: border-box; }
 
     body {
@@ -27,6 +45,374 @@
       /* TODO: add @font-face for TT Interphases Pro from /static/fonts when font files are available. */
       font-family: "TT Interphases Pro", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
       background: linear-gradient(180deg, #f4f7fb 0%, var(--bg) 100%);
+    }
+
+    [data-theme="dark"] body {
+      background: linear-gradient(180deg, #010409 0%, var(--bg) 100%);
+    }
+
+    /* Dark mode specific overrides for hardcoded colors */
+    [data-theme="dark"] .btn.secondary {
+      background: var(--panel);
+      color: var(--text);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .btn.ghost {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .btn.ghost:hover {
+      background: rgba(255,255,255,0.05);
+    }
+
+    [data-theme="dark"] .detail-left {
+      border-right-color: var(--line);
+    }
+
+    [data-theme="dark"] input,
+    [data-theme="dark"] textarea,
+    [data-theme="dark"] select {
+      background: var(--bg);
+      color: var(--text);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] input::placeholder,
+    [data-theme="dark"] textarea::placeholder {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .modal-card,
+    [data-theme="dark"] .settings-card,
+    [data-theme="dark"] .delete-confirm-card {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    /* Detail modal (add/edit goal, event, workout form) */
+    [data-theme="dark"] .detail-shell {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .detail-top {
+      background: #0d1117;
+      border-bottom-color: var(--line);
+    }
+
+    [data-theme="dark"] .detail-right {
+      background: #0d1117;
+    }
+
+    [data-theme="dark"] .field label {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .field input,
+    [data-theme="dark"] .field textarea,
+    [data-theme="dark"] .field select {
+      background: var(--bg);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .comment-card {
+      background: var(--bg);
+      border-color: var(--line);
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .modal-footer {
+      background: var(--panel);
+      border-top-color: var(--line);
+    }
+
+    [data-theme="dark"] .modal-top h3,
+    [data-theme="dark"] .modal-top h2 {
+      color: var(--text);
+    }
+
+    /* Action modal (add workout / goal / event popups) */
+    [data-theme="dark"] .section-label {
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .type-btn {
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .type-btn:hover {
+      background: rgba(255,255,255,0.06);
+    }
+
+    [data-theme="dark"] .type-icon {
+      background: #1e2530;
+    }
+
+    [data-theme="dark"] .m-title {
+      color: var(--text);
+    }
+
+    /* Goal / event list items on home panel */
+    [data-theme="dark"] .goal-item,
+    [data-theme="dark"] .event-item {
+      background: #1a2030;
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .goal-item p,
+    [data-theme="dark"] .event-item p {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .goal-btn,
+    [data-theme="dark"] .plus-btn {
+      background: var(--panel);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .list-item {
+      border-top-color: var(--line);
+    }
+
+    /* General dark-gray text that must lighten in dark mode */
+    [data-theme="dark"] .panel-title {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .btn.ghost {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .detail-date {
+      color: var(--blue);
+    }
+
+    [data-theme="dark"] .tp-table-head,
+    [data-theme="dark"] .tp-minmax-head {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .tp-row label,
+    [data-theme="dark"] .tp-minmax-row label,
+    [data-theme="dark"] .tp-eq-row label,
+    [data-theme="dark"] .tp-equipment-title {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .tp-unit,
+    [data-theme="dark"] .tp-unit-select {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .wv-date-line,
+    [data-theme="dark"] .wv-sport-name,
+    [data-theme="dark"] .wv-meta-line {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .wv-title-input {
+      color: var(--text);
+      background: transparent;
+    }
+
+    [data-theme="dark"] .ctx-menu {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .ctx-menu button {
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .ctx-menu button:hover,
+    [data-theme="dark"] .ctx-menu button:focus-visible {
+      background: rgba(255,255,255,0.08);
+    }
+
+    /* ── Workout view modal ── */
+    [data-theme="dark"] .wv-shell {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .wv-top {
+      background: var(--panel);
+    }
+
+    [data-theme="dark"] .wv-top.status-green  { background: #0d2118; }
+    [data-theme="dark"] .wv-top.status-yellow { background: #1e1a00; }
+    [data-theme="dark"] .wv-top.status-red    { background: #200d10; }
+    [data-theme="dark"] .wv-top.status-gray   { background: #151820; }
+
+    [data-theme="dark"] .wv-sport-toggle {
+      background: var(--panel);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .wv-sport-menu {
+      background: var(--panel);
+      border-color: var(--line);
+      box-shadow: 0 14px 22px rgba(0,0,0,0.5);
+    }
+
+    [data-theme="dark"] .wv-sport-item {
+      background: var(--panel);
+    }
+
+    [data-theme="dark"] .wv-sport-item:hover {
+      background: #1e2530;
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .wv-sport-item span {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .wv-tab.summary {
+      background: var(--panel);
+      color: var(--blue);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .wv-head-status-sep,
+    [data-theme="dark"] .wv-top-comments,
+    [data-theme="dark"] .wv-top-feel-rpe {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .wv-card {
+      background: #1a2030;
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .wv-files-popover .wv-card {
+      background: var(--panel);
+    }
+
+    [data-theme="dark"] .wv-file-row {
+      background: var(--bg);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .feel-btn {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    /* tp-in inputs (planned/completed table) */
+    [data-theme="dark"] .tp-in {
+      background: var(--bg);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .tp-in.readonly,
+    [data-theme="dark"] .tp-in.muted {
+      background: #1e2530;
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .tp-unit-select,
+    [data-theme="dark"] .tp-select {
+      background: var(--bg);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    /* Workout-view compact mode header colors */
+    [data-theme="dark"] .workout-view-modal:not(.analyze-mode) #wvSummary .tp-table-head,
+    [data-theme="dark"] .workout-view-modal:not(.analyze-mode) #wvSummary .tp-minmax-head,
+    [data-theme="dark"] .workout-view-modal:not(.analyze-mode) #wvSummary .tp-right-block .field label,
+    [data-theme="dark"] .workout-view-modal:not(.analyze-mode) #wvSummary .tp-equipment-title {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .workout-view-modal:not(.analyze-mode) #wvSummary .tp-eq-row label {
+      color: var(--muted);
+    }
+
+    /* Selection stats panel */
+    [data-theme="dark"] .selection-top-cell {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .selection-top-cell strong {
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .selection-metrics th,
+    [data-theme="dark"] .selection-metrics td {
+      background: var(--bg);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .selection-metrics thead th {
+      background: #1e2530;
+      color: var(--muted);
+    }
+
+    /* Lap table */
+    [data-theme="dark"] .lap-table th,
+    [data-theme="dark"] .lap-table td {
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .lap-table th {
+      background: #1e2530;
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .lap-table tr.selected {
+      background: #0c1a38;
+    }
+
+    [data-theme="dark"] .lap-table tbody tr:nth-child(odd)  { background: var(--panel); }
+    [data-theme="dark"] .lap-table tbody tr:nth-child(even) { background: var(--bg); }
+
+    /* Chart box */
+    [data-theme="dark"] .chart-box {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    /* Seg toggle (unit system) */
+    [data-theme="dark"] .seg-toggle {
+      background: var(--bg);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .seg-btn {
+      color: var(--muted);
+    }
+
+    /* Comments */
+    [data-theme="dark"] .comment-feed .comment-item {
+      background: var(--bg);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .comment-delete {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .comment-edit-input,
+    [data-theme="dark"] .comment-input-row input {
+      background: var(--bg);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    /* Analyze smoothing slider */
+    [data-theme="dark"] .analyze-smoothing-input {
+      background: var(--bg);
+      accent-color: var(--blue);
     }
 
     .top-nav {
@@ -99,6 +485,180 @@
       color: #dbe8f4;
       font-size: 11px;
       font-weight: 700;
+    }
+
+    .theme-toggle {
+      background: transparent;
+      border: 0;
+      border-radius: 6px;
+      padding: 4px 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s;
+    }
+
+    .theme-toggle:hover {
+      background: rgba(255,255,255,0.08);
+    }
+
+    .theme-icon {
+      font-size: 16px;
+      line-height: 1;
+      display: block;
+    }
+
+    [data-theme="dark"] .theme-icon::before {
+      content: "🌙";
+    }
+
+    /* ── Calendar dark mode ── */
+    [data-theme="dark"] .calendar-scroll {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .calendar-week-header {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .calendar-week-header span {
+      background: var(--panel);
+      color: var(--muted);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .month {
+      background: var(--panel);
+    }
+
+    [data-theme="dark"] .day {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .day-head {
+      background: var(--panel);
+    }
+
+    [data-theme="dark"] .week-row.week-current .day-head {
+      background: #1e2530;
+    }
+
+    [data-theme="dark"] .day.empty {
+      background: #0d1117;
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .day.today {
+      background: var(--panel);
+    }
+
+    [data-theme="dark"] .d-num {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .quick-add {
+      background: var(--bg);
+      border-color: var(--line);
+      color: var(--muted);
+    }
+
+    /* Calendar item pills */
+    [data-theme="dark"] .item.done        { background: #0f3320; color: #3fb950; }
+    [data-theme="dark"] .item.workout     { background: #2a1a08; color: #d29922; }
+    [data-theme="dark"] .item.event       { background: #0d1f4a; color: #539bf5; border-color: #1a3570; }
+    [data-theme="dark"] .item.goal        { background: #0d2a1a; color: #3fb950; border-color: #1a4a2a; }
+    [data-theme="dark"] .item.note        { background: #1e1040; color: #c792ea; border-color: #3a2060; }
+    [data-theme="dark"] .item.metrics     { background: #0a2233; color: #56b4d3; border-color: #1a3a4f; }
+    [data-theme="dark"] .item.availability{ background: #1c1f26; color: #8b949e; border-color: #30363d; }
+    [data-theme="dark"] .item.paired-green  { background: #0f3320; border-color: #1d5c34; color: #3fb950; }
+    [data-theme="dark"] .item.paired-orange { background: #2a1500; border-color: #5c3010; color: #ff8c42; }
+    [data-theme="dark"] .item.paired-yellow { background: #2a2200; border-color: #5c4c00; color: #d4a017; }
+    [data-theme="dark"] .item.paired-red    { background: #2a0a0e; border-color: #5c1a22; color: #f85149; }
+    [data-theme="dark"] .item.unplanned     { background: #1c1f26; border-color: #30363d; color: #8b949e; }
+
+    /* Work cards */
+    [data-theme="dark"] .work-card {
+      background: #1a2030;
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    [data-theme="dark"] .work-card .wc-meta,
+    [data-theme="dark"] .work-card .wc-metrics,
+    [data-theme="dark"] .work-card .wc-bottom {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .card-menu-btn {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .card-menu-btn:hover {
+      background: rgba(255,255,255,0.08);
+    }
+
+    [data-theme="dark"] .work-card.done         { border-top-color: #3fb950; background: #0d2118; }
+    [data-theme="dark"] .work-card.workout      { border-top-color: #44627f; background: #151c27; }
+    [data-theme="dark"] .work-card.unplanned    { border-top-color: #3d4a59; background: #151c27; }
+    [data-theme="dark"] .work-card.paired-green  { border-top-color: #3fb950; background: #0d2118; }
+    [data-theme="dark"] .work-card.paired-orange { border-top-color: #ff8c42; background: #1f1206; }
+    [data-theme="dark"] .work-card.paired-yellow { border-top-color: #d4a017; background: #1e1a00; }
+    [data-theme="dark"] .work-card.paired-red    { border-top-color: #f85149; background: #200d10; }
+    [data-theme="dark"] .work-card.event        { border-top-color: #539bf5; background: #0c1a38; }
+    [data-theme="dark"] .work-card.goal         { border-top-color: #3fb950; background: #0d2118; }
+    [data-theme="dark"] .work-card.note         { border-top-color: #c792ea; background: #180e2e; }
+    [data-theme="dark"] .work-card.metrics      { border-top-color: #56b4d3; background: #081a27; }
+    [data-theme="dark"] .work-card.availability { border-top-color: #3d4a59; background: #151820; }
+
+    [data-theme="dark"] .delta-up   { color: #ff8c42; }
+    [data-theme="dark"] .delta-down { color: #d4a017; }
+
+    /* Week summary column */
+    [data-theme="dark"] .week-summary {
+      background: var(--panel);
+      border-color: var(--line);
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .ws-label-row span {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .ws-row {
+      border-top-color: var(--line);
+    }
+
+    /* Calendar header month label (inline style override) */
+    [data-theme="dark"] #calHeaderMonth {
+      color: var(--text);
+    }
+
+    /* Explain box & metric chips */
+    [data-theme="dark"] .explain {
+      background: #161b22;
+      border-color: var(--line);
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .spark-box {
+      background: #161b22;
+      border-color: var(--line);
+    }
+
+    [data-theme="dark"] .spark-head {
+      color: var(--muted);
+    }
+
+    [data-theme="dark"] .badge.done    { background: #0f3320; color: var(--good); }
+    [data-theme="dark"] .badge.planned { background: #2a1a08; color: var(--planned); }
+
+    [data-theme="light"] .theme-icon::before,
+    :root:not([data-theme]) .theme-icon::before {
+      content: "☀️";
     }
 
     .nav-settings {
@@ -1380,6 +1940,9 @@
       cursor: pointer;
       font-size: 18px;
       line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .feel-btn.active {

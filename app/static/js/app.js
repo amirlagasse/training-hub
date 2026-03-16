@@ -3805,6 +3805,23 @@
       }
     });
 
+    // ── Dark mode toggle ──
+    function initDarkMode() {
+      const savedTheme = localStorage.getItem('theme') || 'light';
+      document.documentElement.setAttribute('data-theme', savedTheme);
+
+      const themeToggle = document.getElementById('themeToggle');
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+          const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', newTheme);
+          localStorage.setItem('theme', newTheme);
+        });
+      }
+    }
+
+    initDarkMode();
     buildTypeGrids();
     bindWidgetToggles();
     applyWidgetPrefs();

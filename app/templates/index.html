@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260315h" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260316d" />
 </head>
 <body>
   <header class="top-nav">
@@ -22,6 +22,9 @@
     </nav>
     <div class="nav-right">
       <input id="uploadFitInput" type="file" accept=".fit" style="display:none;" />
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
+        <span class="theme-icon"></span>
+      </button>
       <div class="account-wrap" id="accountWrap">
         <button class="account-btn" id="accountMenuBtn" type="button" aria-label="Account menu">
           <span class="account-icon" aria-hidden="true">&#128100;</span>
@@ -116,7 +119,7 @@
       <div class="calendar-wrap">
         <div class="calendar-head">
           <div class="cal-nav">
-            <h3 id="calHeaderMonth" style="margin:0;font-size:18px;color:#31455f;">February 2026</h3>
+            <h3 id="calHeaderMonth" style="margin:0;font-size:18px;color:var(--text);">February 2026</h3>
             <button class="btn secondary" id="calTodayBtn" type="button" style="padding:5px 10px;font-size:12px;">Today</button>
           </div>
           <div style="display:flex;gap:8px;align-items:center;">
@@ -530,7 +533,7 @@
                     <div class="field">
                       <label>How did you feel?</label>
                       <div class="feel-row" id="feelRow">
-                        <button class="feel-btn" type="button" data-feel="1" title="Very Weak">😫</button>
+                        <button class="feel-btn" type="button" data-feel="1" title="Very Weak"><img src="/icons/workouts/run.png" width="28" height="28"></button><!--😫</button>-->
                         <button class="feel-btn" type="button" data-feel="2" title="Weak">🙁</button>
                         <button class="feel-btn" type="button" data-feel="3" title="Normal">😐</button>
                         <button class="feel-btn" type="button" data-feel="4" title="Strong">🙂</button>
