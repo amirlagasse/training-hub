@@ -7,7 +7,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
-
 import requests
 from dotenv import load_dotenv
 from fitparse import FitFile
@@ -33,6 +32,7 @@ TEMPLATES_DIR = Path("app/templates")
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 STRAVA_ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
 FILE_LOCK = threading.Lock()
+_pending_oauth_state: str = ""
 
 
 def read_json_file(path: Path, default: Any) -> Any:
@@ -166,10 +166,8 @@ def load_calendar_items() -> list[dict[str, Any]]:
         return raw
     return []
 
-
 def save_calendar_items(items: list[dict[str, Any]]) -> None:
     write_json_file(CALENDAR_FILE, items)
-
 
 def load_pairs() -> list[dict[str, Any]]:
     raw = read_json_file(PAIRS_FILE, [])
@@ -177,17 +175,14 @@ def load_pairs() -> list[dict[str, Any]]:
         return raw
     return []
 
-
 def save_pairs(items: list[dict[str, Any]]) -> None:
     write_json_file(PAIRS_FILE, items)
-
 
 def load_activity_overrides() -> dict[str, dict[str, Any]]:
     raw = read_json_file(ACTIVITY_OVERRIDES_FILE, {})
     if isinstance(raw, dict):
         return raw
     return {}
-
 
 def save_activity_overrides(items: dict[str, dict[str, Any]]) -> None:
     write_json_file(ACTIVITY_OVERRIDES_FILE, items)
@@ -246,7 +241,7 @@ def default_settings() -> dict[str, Any]:
             "strength": None,
             "other": None,
         },
-        "lthr": {"run": None, "ride": None},
+        "lthr": {"run": None, "ride": None, "row": None, "global": None},
     }
 
 
@@ -693,6 +688,12 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
 
     if kind == "event":
         item["event_type"] = str(payload.get("event_type", "Race")).strip() or "Race"
+        raw_priority = str(payload.get("priority", "C")).strip().upper()
+        item["priority"] = raw_priority if raw_priority in ("A", "B", "C") else "C"
+
+    if kind == "goal":
+        item["completed"] = bool(payload.get("completed", False))
+        item["sort_order"] = int(payload.get("sort_order", 0))
 
     if kind == "availability":
         item["availability"] = str(payload.get("availability", "Unavailable")).strip() or "Unavailable"
@@ -723,13 +724,26 @@ def put_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return save_settings(payload)
 
 
+@app.get("/strava-status")
+def strava_status() -> dict:
+    data = read_json_file(TOKEN_FILE, {})
+    connected = bool(data.get("access_token"))
+    athlete = data.get("athlete", {})
+    return {
+        "connected": connected,
+        "athlete_name": f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip() if connected else None,
+    }
+
+
 @app.get("/connect")
 def connect() -> RedirectResponse:
+    global _pending_oauth_state
     client_id = os.getenv("STRAVA_CLIENT_ID")
     redirect_uri = os.getenv("STRAVA_REDIRECT_URI")
     if not client_id or not redirect_uri:
         raise HTTPException(status_code=500, detail="Missing STRAVA_CLIENT_ID or STRAVA_REDIRECT_URI.")
     state = secrets.token_urlsafe(24)
+    _pending_oauth_state = state
 
     auth_url = (
         "https://www.strava.com/oauth/authorize"
@@ -740,20 +754,19 @@ def connect() -> RedirectResponse:
         "&approval_prompt=auto"
         "&scope=read,activity:read"
     )
-    response = RedirectResponse(url=auth_url)
-    response.set_cookie("strava_oauth_state", state, httponly=True, samesite="lax")
-    return response
+    return RedirectResponse(url=auth_url)
 
 
 @app.get("/callback")
-def callback(request: Request, code: str = Query(...), state: str = Query(...)) -> RedirectResponse:
+def callback(code: str = Query(...), state: str = Query(...)) -> RedirectResponse:
+    global _pending_oauth_state
     client_id = os.getenv("STRAVA_CLIENT_ID")
     client_secret = os.getenv("STRAVA_CLIENT_SECRET")
     if not client_id or not client_secret:
         raise HTTPException(status_code=500, detail="Missing STRAVA_CLIENT_ID or STRAVA_CLIENT_SECRET.")
-    expected_state = request.cookies.get("strava_oauth_state", "")
-    if not expected_state or state != expected_state:
+    if not _pending_oauth_state or state != _pending_oauth_state:
         raise HTTPException(status_code=400, detail="Invalid OAuth state.")
+    _pending_oauth_state = ""
 
     resp = requests.post(
         STRAVA_TOKEN_URL,
@@ -770,9 +783,7 @@ def callback(request: Request, code: str = Query(...), state: str = Query(...)) 
 
     token_data = resp.json()
     save_tokens(token_data)
-    response = RedirectResponse(url="/")
-    response.delete_cookie("strava_oauth_state")
-    return response
+    return RedirectResponse(url="/")
 
 
 @app.get("/activities")
@@ -1287,7 +1298,6 @@ def get_planned_workouts() -> list[dict[str, Any]]:
         }
         for i in items
     ]
-
 
 @app.post("/planned-workouts")
 def create_planned_workout(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:

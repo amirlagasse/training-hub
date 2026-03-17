@@ -64,6 +64,7 @@
 
     const ICON_ASSETS = {
       run: '/icons/workouts/run.png',
+      ride: '/icons/workouts/bike.png',
       bike: '/icons/workouts/bike.png',
       swim: '/icons/workouts/swim.png',
       brick: '/icons/workouts/brick.png',
@@ -73,6 +74,7 @@
       strength: '/icons/workouts/strength.png',
       timer: '/icons/workouts/other_custom.png',
       ski: '/icons/workouts/XC_Ski.png',
+      row: '/icons/workouts/row.png',
       rowing: '/icons/workouts/row.png',
       walk: '/icons/workouts/walk.png',
       other: '/icons/workouts/other_custom.png',
@@ -88,6 +90,7 @@
     let activities = [];
     let calendarItems = [];
     let pairs = [];
+    let currentDragData = null; // tracks active drag payload reliably
     let selectedDate = todayKey();
     let selectedKind = 'workout';
     let selectedWorkoutType = 'Run';
@@ -388,7 +391,7 @@
       const plannedTss = Number(item.planned_tss || 0);
       if (plannedTss > 0) return plannedTss;
       const userIntensity = Number(item.intensity || 0);
-      const intensity = userIntensity > 0 ? (0.4 + Math.min(10, userIntensity) / 10) : intensityByType(item.workout_type || 'Other');
+      const intensity = userIntensity > 0 ? (0.45 + (Math.min(10, userIntensity) / 10) * 0.55) : intensityByType(item.workout_type || 'Other');
       return estimateTss(Number(item.duration_min || 0), intensity);
     }
 
@@ -847,8 +850,12 @@
         document.getElementById('dDistance').value = '';
       }
       document.getElementById('dIntensity').value = existingItem ? (existingItem.intensity || 6) : '6';
-      document.getElementById('dEventType').value = existingItem ? (existingItem.event_type || 'Race') : 'Race';
+      document.getElementById('dEventType').value = existingItem ? (existingItem.event_type || 'Road Running') : 'Road Running';
       document.getElementById('dAvailability').value = existingItem ? (existingItem.availability || 'Unavailable') : 'Unavailable';
+      const activePriority = existingItem ? (existingItem.priority || 'C') : 'C';
+      document.querySelectorAll('#dEventPriority .seg-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.priority === activePriority);
+      });
 
       document.getElementById('workoutFields').classList.toggle('hidden', selectedKind !== 'workout');
       document.getElementById('eventFields').classList.toggle('hidden', selectedKind !== 'event');
@@ -885,6 +892,8 @@
 
       if (selectedKind === 'event') {
         payload.event_type = document.getElementById('dEventType').value;
+        const activeP = document.querySelector('#dEventPriority .seg-btn.active');
+        payload.priority = activeP ? activeP.dataset.priority : 'C';
       }
 
       if (selectedKind === 'availability') {
@@ -1080,6 +1089,78 @@
 
       if (!opts.length) return;
       openContextMenu(ev.clientX, ev.clientY, opts);
+    }
+
+    function confirmAndPair(plannedId, stravaId) {
+      if (localStorage.getItem('pair_skip_confirm') === 'true') {
+        pairWorkouts(plannedId, stravaId);
+        return;
+      }
+      const planned = calendarItems.find(i => String(i.id) === String(plannedId));
+      const completed = activities.find(a => String(a.id) === String(stravaId));
+
+      const cDur  = hms(Number(completed && completed.moving_time || 0));
+      const cDist = completed ? fmtDistanceMeters(Number(completed.distance || 0)) : '--';
+      const cTss  = completed ? Math.round(activityToTss(completed)) : 0;
+      const pDur  = planned ? formatDurationClockCompact(Number(planned.duration_min || 0)) : '--';
+      const sportKey = planned ? workoutTypeSportKey(planned.workout_type) : 'other';
+      const iconSrc = ICON_ASSETS[sportKey] || ICON_ASSETS.other;
+      const type = (planned && planned.workout_type) || (completed && completed.type) || 'Workout';
+
+      const overlay = document.createElement('div');
+      overlay.className = 'pair-confirm-overlay';
+      overlay.innerHTML = `
+        <div class="pair-confirm-modal">
+          <h3 class="pair-confirm-title">Are you sure you want to pair these workouts?</h3>
+          <p class="pair-confirm-sub">Pairing will attach the completed workout to the planned workout. All of your data, descriptions, and comments will remain intact.</p>
+          <div class="pair-confirm-preview">
+            <div class="pair-preview-col">
+              <p class="pair-preview-label">Completed</p>
+              <div class="pair-preview-card pair-preview-done">
+                <img src="${iconSrc}" class="pair-preview-icon" />
+                <strong>${type}</strong>
+                <span>${cDur}&#10003;</span>
+                <span>${cDist}</span>
+                <span>${cTss} TSS</span>
+              </div>
+              <p class="pair-preview-label" style="margin-top:10px;">Planned</p>
+              <div class="pair-preview-card pair-preview-planned">
+                <img src="${iconSrc}" class="pair-preview-icon" />
+                <span>${pDur}</span>
+              </div>
+            </div>
+            <div class="pair-confirm-arrow">&#8594;</div>
+            <div class="pair-preview-col">
+              <div class="pair-preview-card pair-preview-merged">
+                <img src="${iconSrc}" class="pair-preview-icon" />
+                <span>${cDur}&#10003;</span>
+                <span>${cDist}</span>
+                <span>${cTss} TSS</span>
+                <span class="pair-preview-planned-line">P: ${pDur}</span>
+              </div>
+              <p class="pair-preview-label pair-label-merged">Planned and<br>Completed</p>
+            </div>
+          </div>
+          <label class="pair-confirm-skip">
+            <input type="checkbox" id="pairSkipCheck" /> Don't show this again
+          </label>
+          <div class="pair-confirm-btns">
+            <button class="btn-secondary" id="pairCancelBtn">Cancel</button>
+            <button class="btn-primary" id="pairConfirmBtn">Pair</button>
+          </div>
+        </div>`;
+
+      document.body.appendChild(overlay);
+
+      overlay.querySelector('#pairCancelBtn').addEventListener('click', () => overlay.remove());
+      overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
+      overlay.querySelector('#pairConfirmBtn').addEventListener('click', async () => {
+        if (overlay.querySelector('#pairSkipCheck').checked) {
+          localStorage.setItem('pair_skip_confirm', 'true');
+        }
+        overlay.remove();
+        await pairWorkouts(plannedId, stravaId);
+      });
     }
 
     async function pairWorkouts(plannedId, stravaId) {
@@ -2909,33 +2990,153 @@
       renderMain();
     }
 
+    function buildCtlProjection(eventDateKey) {
+      const todayMet = buildMetricsToDate(todayKey());
+      const historySeries = todayMet.ctlSeries.slice(-90);
+      const todayCtl = historySeries[historySeries.length - 1];
+
+      const plannedMap = {};
+      const today = todayKey();
+      calendarItems
+        .filter(i => i.kind === 'workout' && i.date > today)
+        .forEach(i => { plannedMap[i.date] = (plannedMap[i.date] || 0) + itemToTss(i); });
+
+      const projectedSeries = [todayCtl];
+      let ctlPrev = todayCtl;
+      const cur = parseDateKey(today);
+      const end = parseDateKey(eventDateKey);
+      cur.setDate(cur.getDate() + 1);
+      while (cur <= end) {
+        const tss = plannedMap[dateKeyFromDate(cur)] || 0;
+        ctlPrev = ctlPrev + (tss - ctlPrev) / 42;
+        projectedSeries.push(ctlPrev);
+        cur.setDate(cur.getDate() + 1);
+      }
+
+      return { historySeries, projectedSeries, todayCtl, eventCtl: ctlPrev };
+    }
+
+    function renderEventCtlChart(container, event) {
+      const proj = buildCtlProjection(event.date);
+      const { historySeries, projectedSeries, todayCtl, eventCtl } = proj;
+
+      const W = 500, H = 160, PAD = { t: 16, r: 80, b: 20, l: 10 };
+      const chartW = W - PAD.l - PAD.r;
+      const chartH = H - PAD.t - PAD.b;
+      const totalPoints = historySeries.length + projectedSeries.length - 1;
+      const allVals = [...historySeries, ...projectedSeries.slice(1)];
+      const minV = Math.min(...allVals) * 0.92;
+      const maxV = Math.max(...allVals, 1) * 1.06;
+
+      const xOf = i => PAD.l + (i / (totalPoints - 1)) * chartW;
+      const yOf = v => PAD.t + chartH - ((v - minV) / (maxV - minV)) * chartH;
+
+      const histPts = historySeries.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ');
+      const todayIdx = historySeries.length - 1;
+      const projPts = projectedSeries.map((v, i) => `${xOf(todayIdx + i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ');
+
+      const todayX = xOf(todayIdx), todayY = yOf(todayCtl);
+      const eventX = xOf(totalPoints - 1), eventY = yOf(eventCtl);
+      const eventCtlRounded = Math.round(eventCtl);
+      const todayCtlRounded = Math.round(todayCtl);
+
+      container.innerHTML = `
+        <svg class="event-ctl-chart" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" aria-label="CTL trend to event">
+          <defs>
+            <linearGradient id="evHistGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#5a8fd4" stop-opacity="0.18"/>
+              <stop offset="100%" stop-color="#5a8fd4" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <polyline points="${histPts}" fill="none" stroke="#4a7fc1" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+          <polyline points="${projPts}" fill="none" stroke="#6a9fd8" stroke-width="1.8" stroke-dasharray="5,4" stroke-linejoin="round" stroke-linecap="round"/>
+          <circle cx="${todayX.toFixed(1)}" cy="${todayY.toFixed(1)}" r="5" fill="#4a7fc1" stroke="#fff" stroke-width="1.5"/>
+          <text x="${(todayX + 8).toFixed(1)}" y="${(todayY - 6).toFixed(1)}" class="ectl-label" font-weight="700">Today ${todayCtlRounded} CTL</text>
+          <circle cx="${eventX.toFixed(1)}" cy="${eventY.toFixed(1)}" r="5" fill="#7a9fc0" stroke="#fff" stroke-width="1.5"/>
+          <text x="${(eventX - 4).toFixed(1)}" y="${(eventY - 10).toFixed(1)}" class="ectl-label" text-anchor="end">Event ${eventCtlRounded} CTL</text>
+          <text x="${(eventX - 4).toFixed(1)}" y="${(eventY - 22).toFixed(1)}" class="ectl-label" text-anchor="end">${event.title}</text>
+        </svg>`;
+    }
+
     function renderEvents() {
       const list = document.getElementById('eventsList');
-      const events = calendarItems
+      const today = todayKey();
+      const allEvents = calendarItems
         .filter(i => i.kind === 'event')
-        .sort((a, b) => (a.date > b.date ? 1 : -1))
-        .slice(0, 5);
+        .sort((a, b) => (a.date > b.date ? 1 : -1));
 
       list.innerHTML = '';
-      if (!events.length) {
+      if (!allEvents.length) {
         list.innerHTML = '<p class="meta">No events yet. Click + to add one.</p>';
         return;
       }
 
-      events.forEach(e => {
-        const node = document.createElement('div');
-        node.className = 'event-item';
-        node.innerHTML = `<h4>${e.title}</h4><p>${e.date} • ${e.event_type || 'Event'}</p>`;
-        list.appendChild(node);
+      const priorityOrder = { A: 0, B: 1, C: 2 };
+      const upcoming = allEvents.filter(e => e.date >= today);
+      upcoming.sort((a, b) => {
+        const pa = priorityOrder[a.priority] ?? 2;
+        const pb = priorityOrder[b.priority] ?? 2;
+        if (pa !== pb) return pa - pb;
+        return a.date > b.date ? 1 : -1;
       });
+      const featured = upcoming[0] || allEvents[allEvents.length - 1];
+      const eventDate = parseDateKey(featured.date);
+      const todayDate = parseDateKey(today);
+      const daysUntil = Math.round((eventDate - todayDate) / 86400000);
+      const weeksUntil = Math.round(daysUntil / 7);
+      const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+      const mon = months[eventDate.getMonth()];
+      const day = eventDate.getDate();
+
+      const featuredEl = document.createElement('div');
+      featuredEl.className = 'event-featured';
+
+      const badgeEl = document.createElement('div');
+      badgeEl.className = 'event-date-badge';
+      badgeEl.innerHTML = `<span class="edb-month">${mon}</span><span class="edb-day">${day}</span>`;
+
+      const infoEl = document.createElement('div');
+      infoEl.className = 'event-featured-info';
+      const countdownText = daysUntil > 0
+        ? `${weeksUntil > 0 ? weeksUntil + ' WEEK' + (weeksUntil !== 1 ? 'S' : '') : daysUntil + ' DAY' + (daysUntil !== 1 ? 'S' : '')} UNTIL EVENT`
+        : daysUntil === 0 ? 'TODAY' : 'PAST EVENT';
+      infoEl.innerHTML = `<div class="event-featured-title">${featured.title}</div>
+        <div class="event-countdown">${countdownText}</div>`;
+
+      featuredEl.appendChild(badgeEl);
+      featuredEl.appendChild(infoEl);
+      list.appendChild(featuredEl);
+
+      const chartDiv = document.createElement('div');
+      chartDiv.className = 'event-ctl-chart-wrap';
+      renderEventCtlChart(chartDiv, featured);
+      list.appendChild(chartDiv);
+
+      const tableDiv = document.createElement('div');
+      tableDiv.className = 'events-table';
+      allEvents.forEach((e, idx) => {
+        const eDate = parseDateKey(e.date);
+        const mo = months[eDate.getMonth()];
+        const dy = String(eDate.getDate()).padStart(2, '0');
+        const row = document.createElement('div');
+        row.className = 'events-row' + (idx % 2 === 1 ? ' events-row-alt' : '');
+        row.innerHTML = `<span class="events-row-date">${mo} ${dy}</span><span class="events-row-title">${e.title}</span>`;
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => openDetailModal(e));
+        tableDiv.appendChild(row);
+      });
+      list.appendChild(tableDiv);
     }
 
     function renderGoals() {
       const list = document.getElementById('goalsList');
       const goals = calendarItems
         .filter(i => i.kind === 'goal')
-        .sort((a, b) => (a.date > b.date ? 1 : -1))
-        .slice(0, 6);
+        .sort((a, b) => {
+          const so = (a.sort_order ?? 0) - (b.sort_order ?? 0);
+          if (so !== 0) return so;
+          return a.date > b.date ? 1 : -1;
+        });
 
       list.innerHTML = '';
       if (!goals.length) {
@@ -2943,69 +3144,387 @@
         return;
       }
 
-      goals.forEach(g => {
-        const node = document.createElement('div');
-        node.className = 'goal-item';
-        node.innerHTML = `<h4>${g.title}</h4><p>${g.date}</p>`;
-        list.appendChild(node);
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+      // Header row
+      const header = document.createElement('div');
+      header.className = 'goals-header-row';
+      header.innerHTML = '<span class="goals-col-date">Date</span><span class="goals-col-label">Goals</span>';
+      list.appendChild(header);
+
+      let dragSrc = null;
+
+      goals.forEach((g, idx) => {
+        const gDate = parseDateKey(g.date);
+        const dateLabel = `${months[gDate.getMonth()]} ${gDate.getDate()}`;
+
+        const row = document.createElement('div');
+        row.className = 'goals-row' + (idx % 2 === 1 ? ' goals-row-alt' : '') + (g.completed ? ' goals-row-done' : '');
+        row.draggable = true;
+        row.dataset.id = g.id;
+
+        row.innerHTML = `
+          <span class="goals-col-date goals-date-cell">${dateLabel}</span>
+          <span class="goals-col-goal">
+            <span class="goals-drag-handle" title="Drag to reorder">⠿</span>
+            <input type="checkbox" class="goals-check" ${g.completed ? 'checked' : ''} aria-label="Mark complete" />
+            <span class="goals-title${g.completed ? ' goals-title-done' : ''}">${g.title}</span>
+          </span>`;
+
+        // Checkbox toggle
+        row.querySelector('.goals-check').addEventListener('change', async (e) => {
+          e.stopPropagation();
+          await fetch(`/calendar-items/${g.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...g, completed: e.target.checked }),
+          });
+          await loadData();
+        });
+
+        // Click row to open edit (not on checkbox/handle)
+        row.addEventListener('click', (e) => {
+          if (e.target.closest('.goals-check') || e.target.closest('.goals-drag-handle')) return;
+          openDetailModal(g);
+        });
+
+        // Drag-and-drop
+        row.addEventListener('dragstart', (e) => {
+          dragSrc = row;
+          e.dataTransfer.effectAllowed = 'move';
+          row.classList.add('goals-dragging');
+        });
+        row.addEventListener('dragend', () => {
+          row.classList.remove('goals-dragging');
+          list.querySelectorAll('.goals-row').forEach(r => r.classList.remove('goals-drag-over'));
+        });
+        row.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          if (row !== dragSrc) {
+            list.querySelectorAll('.goals-row').forEach(r => r.classList.remove('goals-drag-over'));
+            row.classList.add('goals-drag-over');
+          }
+        });
+        row.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          if (!dragSrc || dragSrc === row) return;
+          row.classList.remove('goals-drag-over');
+
+          // Reorder in DOM to determine new sequence
+          const rows = [...list.querySelectorAll('.goals-row')];
+          const srcIdx = rows.indexOf(dragSrc);
+          const tgtIdx = rows.indexOf(row);
+          if (srcIdx < tgtIdx) row.after(dragSrc); else row.before(dragSrc);
+
+          // Persist new sort_order for all goals
+          const reordered = [...list.querySelectorAll('.goals-row')];
+          await Promise.all(reordered.map((r, i) => {
+            const item = calendarItems.find(ci => ci.id === r.dataset.id);
+            if (!item) return Promise.resolve();
+            return fetch(`/calendar-items/${item.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...item, sort_order: i }),
+            });
+          }));
+          await loadData();
+        });
+
+        list.appendChild(row);
       });
     }
 
-    function renderHome() {
+    function sportKeyToLabel(key) {
+      return { ride: 'Cycling', run: 'Running', swim: 'Swimming', row: 'Rowing', strength: 'Strength', other: 'Other' }[key] || key;
+    }
+
+    function workoutTypeSportKey(type) {
+      const t = String(type || '').toLowerCase();
+      if (t.includes('ride') || t.includes('bike') || t.includes('cycl')) return 'ride';
+      if (t.includes('run') || t.includes('walk')) return 'run';
+      if (t.includes('swim')) return 'swim';
+      if (t.includes('row')) return 'row';
+      if (t.includes('strength') || t.includes('weight')) return 'strength';
+      return 'other';
+    }
+
+    function buildPowerZones(ftp, sportLabel) {
+      const zones = [
+        { num: '6', lo: 1.21, hi: null, color: '#3d1a6e' },
+        { num: '5', lo: 1.06, hi: 1.20, color: '#6b2090' },
+        { num: '4', lo: 0.91, hi: 1.05, color: '#1e4fc2' },
+        { num: '3', lo: 0.76, hi: 0.90, color: '#1a7fc4' },
+        { num: '2', lo: 0.56, hi: 0.75, color: '#1a9ec4' },
+        { num: '1', lo: 0,    hi: 0.55, color: '#b8d8eb' },
+      ];
+      const el = document.createElement('div');
+      el.className = 'zones-block';
+      el.innerHTML = `
+        <div class="zones-title zones-title-power">Power: ${sportLabel}</div>
+        <div class="zones-threshold">Threshold: ${ftp} W</div>
+        <div class="zones-rows">
+          ${zones.map(z => {
+            const lo = Math.round(z.lo * ftp);
+            const hi = z.hi ? Math.round(z.hi * ftp) : 2000;
+            return `<div class="zone-row">
+              <span class="zone-num">${z.num}</span>
+              <span class="zone-bar-pip" style="background:${z.color}"></span>
+              <span class="zone-range">${lo}-${hi}</span>
+            </div>`;
+          }).join('')}
+        </div>`;
+      return el;
+    }
+
+    function buildHrZones(lthr) {
+      const zones = [
+        { name: 'Zone 5C: Anaerobic Capacity', lo: 1.06, hi: null,  color: '#3d1a6e' },
+        { name: 'Zone 5B: Aerobic Capacity',   lo: 1.03, hi: 1.06,  color: '#6b2090' },
+        { name: 'Zone 5A: SuperThreshold',     lo: 1.00, hi: 1.02,  color: '#8b40a0' },
+        { name: 'Zone 4: SubThreshold',        lo: 0.94, hi: 0.99,  color: '#1e4fc2' },
+        { name: 'Zone 3: Tempo',               lo: 0.89, hi: 0.93,  color: '#1a7fc4' },
+        { name: 'Zone 2: Aerobic',             lo: 0.81, hi: 0.88,  color: '#1a9ec4' },
+        { name: 'Zone 1: Recovery',            lo: 0,    hi: 0.80,  color: '#b8d8eb' },
+      ];
+      const el = document.createElement('div');
+      el.className = 'zones-block zones-block-hr';
+      el.innerHTML = `
+        <div class="zones-title zones-title-hr">Heart Rate</div>
+        <div class="zones-threshold">Threshold: ${lthr} bpm</div>
+        <div class="zones-rows">
+          ${zones.map(z => {
+            const lo = z.lo === 0 ? 0 : Math.round(z.lo * lthr);
+            const hi = z.hi ? Math.round(z.hi * lthr) : 255;
+            return `<div class="zone-row zone-row-hr">
+              <span class="zone-name">${z.name}</span>
+              <span class="zone-bar-pip" style="background:${z.color}"></span>
+              <span class="zone-range">${lo}-${hi}</span>
+            </div>`;
+          }).join('')}
+        </div>`;
+      return el;
+    }
+
+    function renderTrainingZones(doneToday, plannedToday) {
+      const panel = document.getElementById('trainingZonesPanel');
+      const grid  = document.getElementById('trainingZonesGrid');
+      const ftp   = appSettings.ftp || {};
+      const lthr  = appSettings.lthr || {};
+
+      // Collect relevant sport keys from today's activity
+      const sportKeys = new Set();
+      doneToday.forEach(a => sportKeys.add(activitySportKey(a)));
+      plannedToday.forEach(p => sportKeys.add(workoutTypeSportKey(p.workout_type)));
+      if (!sportKeys.size) Object.entries(ftp).forEach(([k, v]) => { if (v) sportKeys.add(k); });
+
+      const anyFtp  = [...sportKeys].some(k => Number(ftp[k] || 0) > 0);
+      const anyLthr = Number(lthr.global || lthr.run || lthr.ride || lthr.row || 0) > 0;
+      if (!anyFtp && !anyLthr) { panel.style.display = 'none'; return; }
+      panel.style.display = '';
+      grid.innerHTML = '';
+
+      const powerCol = document.createElement('div');
+      powerCol.className = 'zones-col';
+      const hrCol = document.createElement('div');
+      hrCol.className = 'zones-col';
+
+      sportKeys.forEach(key => {
+        const ftpVal = Number(ftp[key] || 0);
+        if (ftpVal > 0) powerCol.appendChild(buildPowerZones(ftpVal, sportKeyToLabel(key)));
+      });
+
+      const lthrVal = Number(lthr.global || lthr.run || lthr.ride || lthr.row || 0);
+      if (lthrVal > 0) hrCol.appendChild(buildHrZones(lthrVal));
+
+      const row = document.createElement('div');
+      row.className = 'zones-grid';
+      if (powerCol.children.length) row.appendChild(powerCol);
+      if (hrCol.children.length) row.appendChild(hrCol);
+      grid.appendChild(row);
+    }
+
+    function completionColorClass(actualMin, plannedMin) {
+      if (!plannedMin || plannedMin <= 0) return '';
+      const deviation = Math.abs(actualMin - plannedMin) / plannedMin;
+      if (deviation <= 0.1667) return 'today-card-green';
+      if (deviation <= 0.40)   return 'today-card-yellow';
+      return 'today-card-orange';
+    }
+
+    function yesterdayKey() {
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      return dateKeyFromDate(d);
+    }
+
+    function renderTodayFeed() {
       const today = todayKey();
+      const yesterday = yesterdayKey();
+      const feed = document.getElementById('todayFeed');
+      feed.innerHTML = '';
+
+      const metricsItems = calendarItems.filter(i => i.kind === 'metrics' && i.date === today);
       const doneToday = activities.filter(a => dateKeyFromDate(new Date(a.start_date_local)) === today);
+      const plannedToday = calendarItems.filter(i => i.kind === 'workout' && i.date === today)
+        .sort((a, b) => (a.date > b.date ? 1 : -1));
 
-      const plannedUpcoming = calendarItems
-        .filter(i => i.kind === 'workout' && i.date >= today)
-        .sort((a, b) => (a.date > b.date ? 1 : -1))
-        .slice(0, 8);
+      // Yesterday's missed planned workouts (no pair, no manual completion)
+      const missedYesterday = calendarItems.filter(i => {
+        if (i.kind !== 'workout' || i.date !== yesterday) return false;
+        const pair = pairForPlanned(String(i.id));
+        if (pair) return false;
+        if (Number(i.completed_duration_min || 0) > 0) return false;
+        return true;
+      });
 
-      const doneNode = document.getElementById('todayDone');
-      doneNode.innerHTML = '';
-      if (!doneToday.length) {
-        doneNode.innerHTML = '<p class="meta">No completed workouts for today yet.</p>';
-      } else {
-        doneToday.forEach(a => {
-          const row = document.createElement('button');
-          row.type = 'button';
-          row.className = 'list-item';
-          row.innerHTML = `
-            <div>
-              <p class="title">${a.name || 'Workout'}</p>
-              <p class="meta">${a.type || 'Activity'} • ${fmtDistanceMeters(a.distance)} • ${fmtHours(a.moving_time)} • ${activityToTss(a)} TSS</p>
+      // Metrics cards
+      metricsItems.forEach(m => {
+        const lines = (m.description || '').split('\n').map(l => l.trim()).filter(Boolean);
+        const rows = lines.map(l => { const [k, ...v] = l.split(':'); return { k: k.trim(), v: v.join(':').trim() }; });
+        const card = document.createElement('div');
+        card.className = 'today-card today-card-metrics';
+        card.innerHTML = `
+          <div class="today-card-sport">
+            <span>&#9883;</span> ${m.title || 'Metrics'}
+          </div>
+          ${rows.length ? `<table class="metrics-table">
+            ${rows.map(r => `<tr><td class="metrics-key">${r.k}:</td><td class="metrics-val">${r.v}</td></tr>`).join('')}
+          </table>` : `<p class="meta" style="padding:8px 16px;">${m.description || ''}</p>`}`;
+        card.addEventListener('click', () => openDetailModal(m));
+        feed.appendChild(card);
+      });
+
+      // Completed activity cards (Strava/imported)
+      doneToday.forEach(a => {
+        const sport = String(a.type || a.sport_key || 'Workout');
+        const tss = Math.round(activityToTss(a));
+        const actualMin = Number(a.moving_time || 0) / 60;
+        const sportKey = activitySportKey(a);
+        const iconSrc = ICON_ASSETS[sportKey] || ICON_ASSETS.other;
+
+        // Find matching planned workout to determine color
+        const matchedPair = pairs.find(pr => String(pr.strava_id) === String(a.id));
+        const matchedPlanned = matchedPair ? calendarItems.find(i => String(i.id) === String(matchedPair.planned_id)) : null;
+        const plannedMin = matchedPlanned ? Number(matchedPlanned.duration_min || 0) : 0;
+        const colorClass = completionColorClass(actualMin, plannedMin);
+
+        const card = document.createElement('div');
+        card.className = `today-card today-card-completed ${colorClass}`;
+        card.innerHTML = `
+          <div class="today-card-sport">${sport}</div>
+          <div class="today-card-stats">
+            <img class="today-card-icon" src="${iconSrc}" alt="${sport}" />
+            <span class="today-stat-big">${hms(Number(a.moving_time || 0))}${matchedPlanned ? '&#10003;' : ''}</span>
+            <span class="today-stat-big">${fmtDistanceMeters(a.distance)}</span>
+            <span class="today-stat-big">${tss} <span class="today-stat-unit">TSS</span></span>
+          </div>`;
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', () => openWorkoutModal({ source: 'strava', data: a }));
+        card.addEventListener('contextmenu', ev => showItemMenu(ev, { source: 'strava', data: a }));
+        feed.appendChild(card);
+      });
+
+      // Planned workout cards
+      plannedToday.forEach(p => {
+        const pair = pairForPlanned(String(p.id));
+        const pairedA = pair ? activities.find(a => String(a.id) === String(pair.strava_id)) : null;
+        const sportKey = workoutTypeSportKey(p.workout_type);
+        const iconSrc = ICON_ASSETS[sportKey] || ICON_ASSETS.other;
+        const plannedMin = Number(p.duration_min || 0);
+
+        const completedDur = Number(p.completed_duration_min || 0);
+        const manuallyCompleted = !pairedA && completedDur > 0;
+
+        const card = document.createElement('div');
+
+        if (manuallyCompleted) {
+          const completedTss = Number(p.completed_tss || 0) || Math.round(estimateTss(completedDur, 0.75));
+          const completedDist = fmtDistanceKm(p.completed_distance_km);
+          const colorClass = completionColorClass(completedDur, plannedMin);
+          card.className = `today-card today-card-completed ${colorClass}`;
+          card.innerHTML = `
+            <div class="today-card-sport">
+              ${p.workout_type || 'Workout'}
             </div>
-            <span class="badge done">Done</span>
-          `;
-          row.addEventListener('click', () => openWorkoutModal({ source: 'strava', data: a }));
-          row.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'strava', data: a }));
-          doneNode.appendChild(row);
-        });
+            <div class="today-card-stats">
+              <img class="today-card-icon" src="${iconSrc}" alt="${p.workout_type}" />
+              <span class="today-stat-big">${hms(completedDur * 60)}&#10003;</span>
+              <span class="today-stat-big">${completedDist}</span>
+              <span class="today-stat-big">${completedTss} <span class="today-stat-unit">TSS</span></span>
+            </div>`;
+        } else {
+          const tss = itemToTss(p);
+          // Paired with Strava activity — show completed stats with color
+          if (pairedA) {
+            const actualMin = Number(pairedA.moving_time || 0) / 60;
+            const colorClass = completionColorClass(actualMin, plannedMin);
+            const tssA = Math.round(activityToTss(pairedA));
+            card.className = `today-card today-card-completed ${colorClass}`;
+            card.innerHTML = `
+              <div class="today-card-sport">${p.workout_type || 'Workout'}</div>
+              <div class="today-card-stats">
+                <img class="today-card-icon" src="${iconSrc}" alt="${p.workout_type}" />
+                <span class="today-stat-big">${hms(Number(pairedA.moving_time || 0))}&#10003;</span>
+                <span class="today-stat-big">${fmtDistanceMeters(pairedA.distance)}</span>
+                <span class="today-stat-big">${tssA} <span class="today-stat-unit">TSS</span></span>
+              </div>`;
+          } else {
+            card.className = 'today-card today-card-planned';
+            card.innerHTML = `
+              <div class="today-card-sport today-card-sport-planned">
+                ${p.workout_type || 'Workout'}
+                <span class="badge planned" style="margin-left:auto;">Planned</span>
+              </div>
+              <div class="today-card-stats">
+                <img class="today-card-icon" src="${iconSrc}" alt="${p.workout_type}" />
+                <span class="today-stat-big">${plannedMin ? plannedMin + ' min' : '--'}</span>
+                <span class="today-stat-big">${fmtDistanceKm(p.distance_km)}</span>
+                <span class="today-stat-big">${tss} <span class="today-stat-unit">TSS</span></span>
+              </div>`;
+          }
+        }
+
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', () => openWorkoutModal({ source: pairedA ? 'strava' : 'planned', data: pairedA || p, planned: p, pair }));
+        card.addEventListener('contextmenu', ev => showItemMenu(ev, { source: 'planned', data: p }));
+        feed.appendChild(card);
+      });
+
+      // Yesterday's missed planned workouts — shown as red
+      missedYesterday.forEach(p => {
+        const sportKey = workoutTypeSportKey(p.workout_type);
+        const iconSrc = ICON_ASSETS[sportKey] || ICON_ASSETS.other;
+        const plannedMin = Number(p.duration_min || 0);
+        const tss = itemToTss(p);
+        const card = document.createElement('div');
+        card.className = 'today-card today-card-red';
+        card.innerHTML = `
+          <div class="today-card-sport">
+            ${p.workout_type || 'Workout'}
+            <span class="badge" style="margin-left:auto;background:#fde9e9;color:#c0392b;">Missed</span>
+          </div>
+          <div class="today-card-stats">
+            <img class="today-card-icon" src="${iconSrc}" alt="${p.workout_type}" />
+            <span class="today-stat-big">${plannedMin ? plannedMin + ' min' : '--'}</span>
+            <span class="today-stat-big">${fmtDistanceKm(p.distance_km)}</span>
+            <span class="today-stat-big">${tss} <span class="today-stat-unit">TSS</span></span>
+          </div>`;
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', () => openWorkoutModal({ source: 'planned', data: p, planned: p, pair: null }));
+        card.addEventListener('contextmenu', ev => showItemMenu(ev, { source: 'planned', data: p }));
+        feed.appendChild(card);
+      });
+
+      if (!metricsItems.length && !doneToday.length && !plannedToday.length && !missedYesterday.length) {
+        feed.innerHTML = '<p class="meta" style="padding:16px 18px;">Nothing logged for today yet.</p>';
       }
 
-      const plannedNode = document.getElementById('todayPlanned');
-      plannedNode.innerHTML = '';
-      if (!plannedUpcoming.length) {
-        plannedNode.innerHTML = '<p class="meta">No planned workouts yet. Use + on any calendar day.</p>';
-      } else {
-        plannedUpcoming.forEach(p => {
-          const pair = pairForPlanned(String(p.id));
-          const pairedCompleted = pair ? activities.find(a => String(a.id) === String(pair.strava_id)) : null;
-          const row = document.createElement('button');
-          row.type = 'button';
-          row.className = 'list-item';
-          row.innerHTML = `
-            <div>
-              <p class="title">${p.title || p.workout_type}</p>
-              <p class="meta">${p.date} • ${p.workout_type} • ${Number(p.duration_min || 0)} min • ${fmtDistanceKm(p.distance_km)} • ${itemToTss(p)} TSS</p>
-            </div>
-            <span class="badge planned">Planned</span>
-          `;
-          row.addEventListener('click', () => openWorkoutModal({ source: pairedCompleted ? 'strava' : 'planned', data: pairedCompleted || p, planned: p, pair }));
-          row.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'planned', data: p }));
-          plannedNode.appendChild(row);
-        });
-      }
+      renderTrainingZones(doneToday, plannedToday);
+    }
 
+    function renderHome() {
+      renderTodayFeed();
       renderEvents();
       renderGoals();
       renderPerformanceMetrics();
@@ -3071,10 +3590,31 @@
           dayHead.appendChild(num);
           cell.appendChild(dayHead);
 
+          // Cell-level drag fallback: catches drops anywhere in the day cell
+          cell.addEventListener('dragover', (ev) => ev.preventDefault());
+          cell.addEventListener('drop', (ev) => {
+            ev.preventDefault();
+            const dragData = currentDragData;
+            if (!dragData || dragData.source !== 'strava') return;
+            // Remove any lingering drop-target highlights
+            cell.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+            // Find the single unpaired planned workout for this day
+            const unpairedPlanned = calendarItems.filter(i =>
+              i.kind === 'workout' && i.date === key && !pairByPlannedId.get(String(i.id))
+            );
+            if (unpairedPlanned.length === 1) {
+              confirmAndPair(String(unpairedPlanned[0].id), String(dragData.id));
+            }
+          });
+
           const entries = dayMap[key] || { done: [], items: [] };
           const shownCompleted = new Set();
           const cardsToShow = [];
+          // Group all goals for the day into a single card
+          const goalItems = entries.items.filter(i => i.kind === 'goal');
+          if (goalItems.length > 0) cardsToShow.push({ kind: 'goal-group', items: goalItems });
           entries.items.forEach((item) => {
+            if (item.kind === 'goal') return; // already handled above
             if (item.kind !== 'workout') {
               cardsToShow.push({ kind: 'other', item });
               return;
@@ -3092,11 +3632,71 @@
           });
 
           cardsToShow.slice(0, 6).forEach((entry) => {
+            if (entry.kind === 'goal-group') {
+              const items = entry.items;
+              const card = document.createElement('div');
+              card.className = 'work-card goal';
+              const bullets = items.map(g =>
+                `<li class="wc-goal-item${g.completed ? ' wc-goal-done' : ''}">${g.title || 'Goal'}</li>`
+              ).join('');
+              card.innerHTML = `
+                <button class="card-menu-btn" type="button">&#8942;</button>
+                <div class="wc-kind-head wc-kind-goal"><span class="wc-kind-icon">&#9745;</span> Goals</div>
+                <ul class="wc-goal-list">${bullets}</ul>`;
+              card.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                selectedKind = 'goal'; selectedDate = items[0].date;
+                openDetailModal(items[0]);
+              });
+              card.addEventListener('contextmenu', (ev) => showItemMenu(ev, { source: 'planned', data: items[0] }));
+              card.querySelector('.card-menu-btn').addEventListener('click', (ev) => showItemMenu(ev, { source: 'planned', data: items[0] }));
+              cell.appendChild(card);
+              return;
+            }
             if (entry.kind === 'other') {
               const item = entry.item;
               const card = document.createElement('div');
               card.className = `work-card ${item.kind}`;
-              card.innerHTML = `<button class="card-menu-btn" type="button">&#8942;</button><p class="wc-title">${item.title || item.kind.toUpperCase()}</p><p class="wc-meta">${item.kind.toUpperCase()} • ${item.date}</p>`;
+
+              if (item.kind === 'event') {
+                const d = new Date(item.date + 'T00:00:00');
+                const month = d.toLocaleString('en', { month: 'short' }).toUpperCase();
+                const day = d.getDate();
+                const daysUntil = Math.round((d - new Date(todayKey() + 'T00:00:00')) / 86400000);
+                const countdown = daysUntil > 0 ? `${daysUntil} DAY${daysUntil !== 1 ? 'S' : ''} UNTIL EVENT`
+                  : daysUntil === 0 ? 'EVENT TODAY'
+                  : `${Math.abs(daysUntil)} DAY${Math.abs(daysUntil) !== 1 ? 'S' : ''} AGO`;
+                const priorityBadge = item.priority && item.priority !== 'C'
+                  ? `<span class="wc-priority-badge wc-priority-${item.priority}">${item.priority}</span>` : '';
+                card.innerHTML = `
+                  <button class="card-menu-btn" type="button">&#8942;</button>
+                  <div class="wc-event-layout">
+                    <div class="wc-event-badge"><span class="wc-event-month">${month}</span><span class="wc-event-day">${day}</span></div>
+                    <div class="wc-event-info">
+                      <p class="wc-event-countdown">${countdown}</p>
+                      <p class="wc-event-name">${item.title || 'Event'}${priorityBadge}</p>
+                    </div>
+                  </div>`;
+              } else if (item.kind === 'metrics') {
+                const lines = (item.description || '').split('\n').map(l => l.trim()).filter(Boolean);
+                const preview = lines[0] || item.title || 'Metrics';
+                const more = lines.length > 1 ? `<p class="wc-more">${lines.length - 1} more…</p>` : '';
+                card.innerHTML = `
+                  <button class="card-menu-btn" type="button">&#8942;</button>
+                  <div class="wc-kind-head wc-kind-metrics"><span class="wc-kind-icon">&#9883;</span> ${item.title || 'Metrics'}</div>
+                  <p class="wc-meta wc-metrics-preview">${preview}</p>${more}`;
+              } else if (item.kind === 'note') {
+                const preview = (item.description || item.title || '').substring(0, 60);
+                card.innerHTML = `
+                  <button class="card-menu-btn" type="button">&#8942;</button>
+                  <div class="wc-kind-head wc-kind-note"><span class="wc-kind-icon">&#9998;</span> Note</div>
+                  <p class="wc-meta">${preview}${preview.length === 60 ? '…' : ''}</p>`;
+              } else {
+                card.innerHTML = `
+                  <button class="card-menu-btn" type="button">&#8942;</button>
+                  <p class="wc-title">${item.title || item.kind}</p>`;
+              }
+
               card.addEventListener('click', (ev) => {
                 ev.stopPropagation();
                 selectedKind = item.kind;
@@ -3137,14 +3737,26 @@
               card.draggable = true;
               card.dataset.kind = 'planned';
               card.dataset.plannedId = String(item.id);
-              card.addEventListener('dragstart', (ev) => ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'planned', id: String(item.id) })));
+              card.addEventListener('dragstart', (ev) => {
+                currentDragData = { source: 'planned', id: String(item.id) };
+                ev.dataTransfer.setData('text/plain', JSON.stringify(currentDragData));
+                card.classList.add('dragging-active');
+              });
+              card.addEventListener('dragend', () => { currentDragData = null; card.classList.remove('dragging-active'); });
               card.addEventListener('dragover', (ev) => ev.preventDefault());
-              card.addEventListener('drop', async (ev) => {
+              card.addEventListener('dragenter', (ev) => {
                 ev.preventDefault();
-                const raw = ev.dataTransfer.getData('text/plain');
-                if (!raw) return;
-                const dragData = JSON.parse(raw);
-                if (dragData.source === 'strava') await pairWorkouts(String(item.id), String(dragData.id));
+                if (!completed) card.classList.add('drop-target');
+              });
+              card.addEventListener('dragleave', (ev) => {
+                if (!card.contains(ev.relatedTarget)) card.classList.remove('drop-target');
+              });
+              card.addEventListener('drop', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                card.classList.remove('drop-target');
+                const dragData = currentDragData;
+                if (dragData && dragData.source === 'strava') confirmAndPair(String(item.id), String(dragData.id));
               });
               card.addEventListener('click', (ev) => {
                 ev.stopPropagation();
@@ -3195,17 +3807,29 @@
             card.draggable = true;
             card.dataset.kind = 'strava';
             card.dataset.stravaId = String(a.id);
-            card.addEventListener('dragstart', (ev) => ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'strava', id: String(a.id) })));
+            card.addEventListener('dragstart', (ev) => {
+              currentDragData = { source: 'strava', id: String(a.id) };
+              ev.dataTransfer.setData('text/plain', JSON.stringify(currentDragData));
+              card.classList.add('dragging-active');
+            });
+            card.addEventListener('dragend', () => { currentDragData = null; card.classList.remove('dragging-active'); });
             card.addEventListener('dragover', (ev) => ev.preventDefault());
-            card.addEventListener('drop', async (ev) => {
+            card.addEventListener('dragenter', (ev) => {
               ev.preventDefault();
-              const raw = ev.dataTransfer.getData('text/plain');
-              if (!raw) return;
-              const dragData = JSON.parse(raw);
-              if (dragData.source === 'planned') {
+              card.classList.add('drop-target');
+            });
+            card.addEventListener('dragleave', (ev) => {
+              if (!card.contains(ev.relatedTarget)) card.classList.remove('drop-target');
+            });
+            card.addEventListener('drop', (ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              card.classList.remove('drop-target');
+              const dragData = currentDragData;
+              if (dragData && dragData.source === 'planned') {
                 const draggedPlanned = calendarItems.find((i) => String(i.id) === String(dragData.id));
                 if (compStat === 'unplanned' && hasPlannedAndCompletedContent(draggedPlanned)) return;
-                await pairWorkouts(String(dragData.id), String(a.id));
+                confirmAndPair(String(dragData.id), String(a.id));
               }
             });
             card.addEventListener('click', (ev) => {
@@ -3315,6 +3939,12 @@
       setVal('ftpSwim', 'swim');
       setVal('ftpStrength', 'strength');
       setVal('ftpOther', 'other');
+      const lthr = appSettings.lthr || {};
+      const setLthr = (id, key) => { const el = document.getElementById(id); if (el) el.value = lthr[key] == null ? '' : String(lthr[key]); };
+      setLthr('lthrRide', 'ride');
+      setLthr('lthrRun', 'run');
+      setLthr('lthrRow', 'row');
+      setLthr('lthrGlobal', 'global');
       const system = (appSettings.unit_system === 'imperial'
         || ((appSettings.units || {}).distance === 'mi' && (appSettings.units || {}).elevation === 'ft'))
         ? 'imperial'
@@ -3399,6 +4029,12 @@
           swim: read('ftpSwim'),
           strength: read('ftpStrength'),
           other: read('ftpOther'),
+        },
+        lthr: {
+          ride: read('lthrRide'),
+          run: read('lthrRun'),
+          row: read('lthrRow'),
+          global: read('lthrGlobal'),
         },
       };
       const resp = await fetch('/settings', {
@@ -3506,14 +4142,38 @@
         ev.stopPropagation();
         accountMenu.classList.toggle('hidden');
       });
-      document.getElementById('accountSettingsBtn').addEventListener('click', () => {
+      document.getElementById('accountSettingsBtn').addEventListener('click', async () => {
         accountMenu.classList.add('hidden');
         document.getElementById('settingsModal').classList.add('open');
+        try {
+          const res = await fetch('/strava-status');
+          const data = await res.json();
+          const dot = document.getElementById('stravaStatusDot');
+          const label = document.getElementById('stravaStatusLabel');
+          const btn = document.getElementById('stravaConnectBtn');
+          if (data.connected) {
+            dot.style.background = '#17733e';
+            label.textContent = data.athlete_name ? `Connected as ${data.athlete_name}` : 'Connected';
+            btn.textContent = 'Reconnect';
+          } else {
+            dot.style.background = '#cc4b37';
+            label.textContent = 'Not connected';
+            btn.textContent = 'Connect Strava';
+          }
+        } catch {
+          document.getElementById('stravaStatusLabel').textContent = 'Unable to check status';
+        }
       });
     }
     document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+    document.querySelectorAll('#dEventPriority .seg-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#dEventPriority .seg-btn').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
       });
     });
