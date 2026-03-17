@@ -3343,7 +3343,7 @@
     }
 
     function completionColorClass(actualMin, plannedMin) {
-      if (!plannedMin || plannedMin <= 0) return 'today-card-green';
+      if (!plannedMin || plannedMin <= 0) return '';
       const deviation = Math.abs(actualMin - plannedMin) / plannedMin;
       if (deviation <= 0.1667) return 'today-card-green';
       if (deviation <= 0.40)   return 'today-card-yellow';
@@ -3413,7 +3413,7 @@
           <div class="today-card-sport">${sport}</div>
           <div class="today-card-stats">
             <img class="today-card-icon" src="${iconSrc}" alt="${sport}" />
-            <span class="today-stat-big">${hms(Number(a.moving_time || 0))}&#10003;</span>
+            <span class="today-stat-big">${hms(Number(a.moving_time || 0))}${matchedPlanned ? '&#10003;' : ''}</span>
             <span class="today-stat-big">${fmtDistanceMeters(a.distance)}</span>
             <span class="today-stat-big">${tss} <span class="today-stat-unit">TSS</span></span>
           </div>`;

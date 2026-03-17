@@ -7,7 +7,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
-
 import requests
 from dotenv import load_dotenv
 from fitparse import FitFile
@@ -167,10 +166,8 @@ def load_calendar_items() -> list[dict[str, Any]]:
         return raw
     return []
 
-
 def save_calendar_items(items: list[dict[str, Any]]) -> None:
     write_json_file(CALENDAR_FILE, items)
-
 
 def load_pairs() -> list[dict[str, Any]]:
     raw = read_json_file(PAIRS_FILE, [])
@@ -178,17 +175,14 @@ def load_pairs() -> list[dict[str, Any]]:
         return raw
     return []
 
-
 def save_pairs(items: list[dict[str, Any]]) -> None:
     write_json_file(PAIRS_FILE, items)
-
 
 def load_activity_overrides() -> dict[str, dict[str, Any]]:
     raw = read_json_file(ACTIVITY_OVERRIDES_FILE, {})
     if isinstance(raw, dict):
         return raw
     return {}
-
 
 def save_activity_overrides(items: dict[str, dict[str, Any]]) -> None:
     write_json_file(ACTIVITY_OVERRIDES_FILE, items)
@@ -1304,7 +1298,6 @@ def get_planned_workouts() -> list[dict[str, Any]]:
         }
         for i in items
     ]
-
 
 @app.post("/planned-workouts")
 def create_planned_workout(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
