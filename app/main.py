@@ -1,7 +1,9 @@
+import contextlib
 import json
 import io
 import os
 import secrets
+import sqlite3
 import threading
 from datetime import date, datetime
 from pathlib import Path
@@ -20,6 +22,12 @@ app = FastAPI()
 app.mount("/icons", StaticFiles(directory="icons"), name="icons")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
+
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
+    migrate_from_json()
+
 TOKEN_FILE = Path("data/strava_tokens.json")
 CALENDAR_FILE = Path("data/calendar_items.json")
 PAIRS_FILE = Path("data/workout_pairs.json")
@@ -29,6 +37,7 @@ FIT_PARSED_DIR = Path("data/fit_parsed")
 SETTINGS_FILE = Path("data/settings.json")
 PLANNED_FILE = Path("data/planned_workouts.json")
 TEMPLATES_DIR = Path("app/templates")
+DB_PATH = Path("data/trainingfreaks.db")
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 STRAVA_ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
 FILE_LOCK = threading.Lock()
@@ -49,6 +58,295 @@ def write_json_file(path: Path, payload: Any) -> None:
     with FILE_LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# SQLite helpers
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def get_db():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def init_db() -> None:
+    with get_db() as db:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS activities (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL DEFAULT 'fit',
+                name TEXT,
+                type TEXT,
+                start_date_local TEXT,
+                distance REAL,
+                moving_time REAL,
+                description TEXT,
+                comments TEXT,
+                comments_feed TEXT,
+                feel INTEGER,
+                rpe INTEGER,
+                tss_override REAL,
+                tss_source TEXT,
+                if_value REAL,
+                np_value REAL,
+                hr_tss REAL,
+                work_kj REAL,
+                calories REAL,
+                avg_speed REAL,
+                avg_power REAL,
+                avg_hr REAL,
+                min_hr REAL,
+                max_hr REAL,
+                min_power REAL,
+                max_power REAL,
+                elev_gain_m REAL,
+                fit_id TEXT,
+                fit_filename TEXT,
+                fit_data BLOB,
+                fit_parsed_json TEXT,
+                duration_min REAL,
+                distance_km REAL,
+                distance_m REAL,
+                elevation_m REAL,
+                distance_unit TEXT,
+                elevation_unit TEXT,
+                planned_tss REAL,
+                planned_if REAL,
+                planned_avg_speed REAL,
+                planned_calories REAL,
+                planned_work_kj REAL,
+                completed_duration_min REAL,
+                analysis_edits TEXT,
+                hidden INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS activity_overrides (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                date TEXT,
+                type TEXT,
+                description TEXT,
+                comments TEXT,
+                comments_feed TEXT,
+                feel INTEGER,
+                rpe INTEGER,
+                tss_override REAL,
+                if_value REAL,
+                tss_source TEXT,
+                duration_min REAL,
+                distance_km REAL,
+                distance_m REAL,
+                elevation_m REAL,
+                distance_unit TEXT,
+                elevation_unit TEXT,
+                planned_tss REAL,
+                planned_if REAL,
+                planned_avg_speed REAL,
+                planned_calories REAL,
+                planned_work_kj REAL,
+                completed_duration_min REAL,
+                analysis_edits TEXT,
+                hidden INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
+
+def migrate_from_json() -> None:
+    """One-time migration from legacy JSON files to SQLite. Safe to call repeatedly."""
+    if IMPORTED_ACTIVITIES_FILE.exists():
+        items = read_json_file(IMPORTED_ACTIVITIES_FILE, [])
+        with get_db() as db:
+            for item in items:
+                if db.execute("SELECT id FROM activities WHERE id = ?", (item["id"],)).fetchone():
+                    continue
+                fit_data = None
+                fit_parsed_json = None
+                fit_id = item.get("fit_id")
+                if fit_id:
+                    fit_path = Path("data/imports") / f"{fit_id}.fit"
+                    if fit_path.exists():
+                        fit_data = fit_path.read_bytes()
+                    parsed = read_json_file(FIT_PARSED_DIR / f"{fit_id}.json", {})
+                    if parsed:
+                        fit_parsed_json = json.dumps(parsed)
+                cf = item.get("comments_feed", [])
+                ae = item.get("analysis_edits", {})
+                db.execute(
+                    _activity_insert_sql(),
+                    _activity_insert_params(item, fit_data, fit_parsed_json, cf, ae),
+                )
+
+    if ACTIVITY_OVERRIDES_FILE.exists():
+        overrides = read_json_file(ACTIVITY_OVERRIDES_FILE, {})
+        with get_db() as db:
+            for aid, override in overrides.items():
+                if db.execute("SELECT id FROM activity_overrides WHERE id = ?", (aid,)).fetchone():
+                    continue
+                _upsert_override(db, aid, override)
+
+
+def _activity_insert_sql() -> str:
+    return """
+        INSERT OR IGNORE INTO activities (
+            id, source, name, type, start_date_local, distance, moving_time,
+            description, comments, comments_feed, feel, rpe,
+            tss_override, tss_source, if_value, np_value, hr_tss,
+            work_kj, calories, avg_speed, avg_power, avg_hr, min_hr, max_hr,
+            min_power, max_power, elev_gain_m,
+            fit_id, fit_filename, fit_data, fit_parsed_json,
+            duration_min, distance_km, distance_m, elevation_m,
+            distance_unit, elevation_unit,
+            analysis_edits, hidden, created_at
+        ) VALUES (
+            ?,?,?,?,?,?,?,
+            ?,?,?,?,?,
+            ?,?,?,?,?,
+            ?,?,?,?,?,?,?,
+            ?,?,?,
+            ?,?,?,?,
+            ?,?,?,?,
+            ?,?,
+            ?,?,?
+        )
+    """
+
+
+def _activity_insert_params(
+    item: dict[str, Any],
+    fit_data: bytes | None,
+    fit_parsed_json: str | None,
+    cf: list,
+    ae: dict,
+) -> tuple:
+    return (
+        item["id"],
+        item.get("source", "fit"),
+        item.get("name"),
+        item.get("type"),
+        item.get("start_date_local"),
+        item.get("distance"),
+        item.get("moving_time"),
+        item.get("description", ""),
+        item.get("comments", ""),
+        json.dumps(cf if isinstance(cf, list) else []),
+        item.get("feel"),
+        item.get("rpe"),
+        item.get("tss_override"),
+        item.get("tss_source"),
+        item.get("if_value"),
+        item.get("np_value"),
+        item.get("hr_tss"),
+        item.get("work_kj"),
+        item.get("calories"),
+        item.get("avg_speed"),
+        item.get("avg_power"),
+        item.get("avg_hr"),
+        item.get("min_hr"),
+        item.get("max_hr"),
+        item.get("min_power"),
+        item.get("max_power"),
+        item.get("elev_gain_m"),
+        item.get("fit_id"),
+        item.get("fit_filename"),
+        fit_data,
+        fit_parsed_json,
+        item.get("duration_min"),
+        item.get("distance_km"),
+        item.get("distance_m"),
+        item.get("elevation_m"),
+        item.get("distance_unit"),
+        item.get("elevation_unit"),
+        json.dumps(ae if isinstance(ae, dict) else {}),
+        1 if item.get("hidden") else 0,
+        item.get("created_at", datetime.utcnow().isoformat(timespec="seconds") + "Z"),
+    )
+
+
+def _upsert_override(db: sqlite3.Connection, aid: str, override: dict[str, Any]) -> None:
+    cf = override.get("comments_feed", [])
+    ae = override.get("analysis_edits", {})
+    db.execute(
+        """
+        INSERT OR REPLACE INTO activity_overrides (
+            id, title, date, type, description, comments, comments_feed,
+            feel, rpe, tss_override, if_value, tss_source,
+            duration_min, distance_km, distance_m, elevation_m,
+            distance_unit, elevation_unit,
+            planned_tss, planned_if, planned_avg_speed, planned_calories, planned_work_kj,
+            completed_duration_min, analysis_edits, hidden
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            aid,
+            override.get("title"),
+            override.get("date"),
+            override.get("type"),
+            override.get("description"),
+            override.get("comments"),
+            json.dumps(cf if isinstance(cf, list) else []),
+            override.get("feel"),
+            override.get("rpe"),
+            override.get("tss_override"),
+            override.get("if_value"),
+            override.get("tss_source"),
+            override.get("duration_min"),
+            override.get("distance_km"),
+            override.get("distance_m"),
+            override.get("elevation_m"),
+            override.get("distance_unit"),
+            override.get("elevation_unit"),
+            override.get("planned_tss"),
+            override.get("planned_if"),
+            override.get("planned_avg_speed"),
+            override.get("planned_calories"),
+            override.get("planned_work_kj"),
+            override.get("completed_duration_min"),
+            json.dumps(ae if isinstance(ae, dict) else {}),
+            1 if override.get("hidden") else 0,
+        ),
+    )
+
+
+def row_to_activity(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    d.pop("fit_data", None)
+    d.pop("fit_parsed_json", None)
+    for col in ("comments_feed", "analysis_edits"):
+        raw = d.get(col)
+        if raw and isinstance(raw, str):
+            try:
+                d[col] = json.loads(raw)
+            except json.JSONDecodeError:
+                d[col] = [] if col == "comments_feed" else {}
+        elif raw is None:
+            d[col] = [] if col == "comments_feed" else {}
+    return d
+
+
+def override_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    for col in ("comments_feed", "analysis_edits"):
+        raw = d.get(col)
+        if raw and isinstance(raw, str):
+            try:
+                d[col] = json.loads(raw)
+            except json.JSONDecodeError:
+                d[col] = [] if col == "comments_feed" else {}
+        elif raw is None:
+            d[col] = [] if col == "comments_feed" else {}
+    return d
 
 
 def save_tokens(token_data: dict) -> None:
@@ -179,28 +477,38 @@ def save_pairs(items: list[dict[str, Any]]) -> None:
     write_json_file(PAIRS_FILE, items)
 
 def load_activity_overrides() -> dict[str, dict[str, Any]]:
-    raw = read_json_file(ACTIVITY_OVERRIDES_FILE, {})
-    if isinstance(raw, dict):
-        return raw
-    return {}
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM activity_overrides").fetchall()
+    return {r["id"]: override_to_dict(r) for r in rows}
+
 
 def save_activity_overrides(items: dict[str, dict[str, Any]]) -> None:
-    write_json_file(ACTIVITY_OVERRIDES_FILE, items)
+    with get_db() as db:
+        for aid, override in items.items():
+            _upsert_override(db, aid, override)
 
 
 def load_imported_activities() -> list[dict[str, Any]]:
-    raw = read_json_file(IMPORTED_ACTIVITIES_FILE, [])
-    if isinstance(raw, list):
-        return raw
-    return []
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM activities WHERE source = 'fit' AND hidden = 0"
+        ).fetchall()
+    return [row_to_activity(r) for r in rows]
 
 
-def save_imported_activities(items: list[dict[str, Any]]) -> None:
-    write_json_file(IMPORTED_ACTIVITIES_FILE, items)
+def get_imported_activity(activity_id: str) -> dict[str, Any] | None:
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM activities WHERE id = ?", (activity_id,)
+        ).fetchone()
+    return row_to_activity(row) if row else None
 
 
-def imported_activity_index(items: list[dict[str, Any]], activity_id: str) -> int:
-    return next((i for i, row in enumerate(items) if str(row.get("id")) == activity_id), -1)
+def get_imported_activity_raw(activity_id: str) -> sqlite3.Row | None:
+    with get_db() as db:
+        return db.execute(
+            "SELECT * FROM activities WHERE id = ?", (activity_id,)
+        ).fetchone()
 
 
 def apply_parsed_fit_to_activity(item: dict[str, Any], parsed: dict[str, Any], file_id: str, filename: str) -> dict[str, Any]:
@@ -226,6 +534,7 @@ def apply_parsed_fit_to_activity(item: dict[str, Any], parsed: dict[str, Any], f
     item["min_power"] = summary.get("min_power")
     item["max_power"] = summary.get("max_power")
     item["elev_gain_m"] = summary.get("elev_gain_m")
+    item["hr_tss"] = summary.get("hr_tss")
     return item
 
 
@@ -241,7 +550,7 @@ def default_settings() -> dict[str, Any]:
             "strength": None,
             "other": None,
         },
-        "lthr": {"run": None, "ride": None, "row": None, "global": None},
+        "lthr": {"ride": None, "run": None, "row": None, "swim": None, "strength": None, "other": None, "global": None},
     }
 
 
@@ -276,6 +585,10 @@ def load_settings() -> dict[str, Any]:
         if isinstance(ftp, dict):
             for key in settings["ftp"].keys():
                 settings["ftp"][key] = sanitize_ftp_value(ftp.get(key))
+        lthr = raw.get("lthr", {})
+        if isinstance(lthr, dict):
+            for key in settings["lthr"].keys():
+                settings["lthr"][key] = sanitize_lthr_value(lthr.get(key))
     return settings
 
 
@@ -294,6 +607,10 @@ def save_settings(settings: dict[str, Any]) -> dict[str, Any]:
     if isinstance(ftp, dict):
         for key in merged["ftp"].keys():
             merged["ftp"][key] = sanitize_ftp_value(ftp.get(key))
+    lthr = settings.get("lthr", {})
+    if isinstance(lthr, dict):
+        for key in merged["lthr"].keys():
+            merged["lthr"][key] = sanitize_lthr_value(lthr.get(key))
     write_json_file(SETTINGS_FILE, merged)
     return merged
 
@@ -341,6 +658,41 @@ def _max(values: list[float]) -> float | None:
     if not values:
         return None
     return max(values)
+
+
+def sanitize_lthr_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    return max(100.0, min(220.0, n))
+
+
+# Coggan HR zone upper-bound percentages of LTHR (Z1–Z4; Z5 = above last bound)
+_HR_ZONE_BOUNDS = [68.0, 84.0, 95.0, 106.0]
+_HR_ZONE_RATES = [30.0, 55.0, 70.0, 90.0, 110.0]  # TSS/hr for zones 1–5
+
+
+def _hr_tss(points: list[dict[str, Any]], lthr: float) -> float | None:
+    """Calculate hrTSS from per-second HR series using Coggan zones."""
+    if not lthr or lthr <= 0:
+        return None
+    time_in_zone = [0.0] * 5
+    for p in points:
+        hr = _as_float(p.get("heart_rate"))
+        if hr is None or hr <= 0:
+            continue
+        pct = hr / lthr * 100.0
+        zone = next((i for i, bound in enumerate(_HR_ZONE_BOUNDS) if pct < bound), 4)
+        time_in_zone[zone] += 1.0  # one record ≈ one second
+    total = sum(t / 3600.0 * _HR_ZONE_RATES[z] for z, t in enumerate(time_in_zone))
+    return total if total > 0 else None
 
 
 def _normalized_power(points: list[dict[str, Any]]) -> float | None:
@@ -496,8 +848,11 @@ def parse_fit_stream_to_json(stream: Any, settings: dict[str, Any] | None = None
 
     ftp_key = sport_to_ftp_key(sport)
     ftp_value = None
+    lthr_value = None
     if settings:
         ftp_value = sanitize_ftp_value((settings.get("ftp") or {}).get(ftp_key))
+        lthr_raw = settings.get("lthr") or {}
+        lthr_value = sanitize_lthr_value(lthr_raw.get(ftp_key) or lthr_raw.get("global"))
     np_value = _normalized_power(points)
     if_value = None
     if ftp_value and np_value and np_value > 0:
@@ -505,6 +860,7 @@ def parse_fit_stream_to_json(stream: Any, settings: dict[str, Any] | None = None
     tss_value = None
     if if_value and np_value and ftp_value and duration_s > 0:
         tss_value = (duration_s * np_value * if_value) / (ftp_value * 3600.0) * 100.0
+    hr_tss_value = _hr_tss(points, lthr_value) if lthr_value else None
 
     return {
         "summary": {
@@ -526,8 +882,10 @@ def parse_fit_stream_to_json(stream: Any, settings: dict[str, Any] | None = None
             "sport": sport,
             "sport_key": ftp_key,
             "ftp": ftp_value,
+            "lthr": lthr_value,
             "if": if_value,
             "tss": tss_value,
+            "hr_tss": hr_tss_value,
             "normalized_power": np_value,
         },
         "series": points,
@@ -536,15 +894,24 @@ def parse_fit_stream_to_json(stream: Any, settings: dict[str, Any] | None = None
 
 
 def save_fit_parsed(fit_id: str, data: dict[str, Any]) -> None:
-    write_json_file(FIT_PARSED_DIR / f"{fit_id}.json", data)
+    with get_db() as db:
+        db.execute(
+            "UPDATE activities SET fit_parsed_json = ? WHERE fit_id = ?",
+            (json.dumps(data), fit_id),
+        )
 
 
 def load_fit_parsed(fit_id: str) -> dict[str, Any]:
-    path = FIT_PARSED_DIR / f"{fit_id}.json"
-    data = read_json_file(path, {})
-    if not data:
+    with get_db() as db:
+        row = db.execute(
+            "SELECT fit_parsed_json FROM activities WHERE fit_id = ?", (fit_id,)
+        ).fetchone()
+    if not row or not row["fit_parsed_json"]:
         raise HTTPException(status_code=404, detail="Parsed FIT data not found.")
-    return data
+    try:
+        return json.loads(row["fit_parsed_json"])
+    except json.JSONDecodeError as err:
+        raise HTTPException(status_code=500, detail="Corrupted FIT parsed data.") from err
 
 
 def demo_activities() -> list[dict[str, Any]]:
@@ -800,6 +1167,7 @@ def ui_activities() -> list[dict[str, Any]]:
     demo = demo_activities()
     imported = load_imported_activities()
     overrides = load_activity_overrides()
+
     try:
         live = fetch_activities()
         by_id = {str(x.get("id")): x for x in [*demo, *imported]}
@@ -809,72 +1177,57 @@ def ui_activities() -> list[dict[str, Any]]:
     except HTTPException:
         merged = [*demo, *imported]
 
+    override_fields = [
+        "description", "comments", "comments_feed", "feel", "rpe",
+        "tss_override", "if_value", "tss_source", "analysis_edits",
+        "duration_min", "distance_km", "distance_m", "elevation_m",
+        "distance_unit", "elevation_unit", "planned_tss", "planned_if",
+        "planned_avg_speed", "planned_calories", "planned_work_kj",
+        "completed_duration_min",
+    ]
+
     out: list[dict[str, Any]] = []
     for row in merged:
         rid = str(row.get("id"))
         override = overrides.get(rid, {})
+        if override.get("hidden"):
+            continue
         updated = {**row}
-        if "date" in override:
+        if override.get("date"):
             old = str(updated.get("start_date_local", ""))
             time_part = old[10:] if len(old) > 10 else "T08:00:00"
             updated["start_date_local"] = f"{override['date']}{time_part}"
-        if "title" in override:
+        if override.get("title"):
             updated["name"] = str(override["title"])
-        if "type" in override:
+        if override.get("type"):
             updated["type"] = str(override["type"])
-        for k in [
-            "description",
-            "comments",
-            "comments_feed",
-            "feel",
-            "rpe",
-            "tss_override",
-            "if_value",
-            "analysis_edits",
-            "duration_min",
-            "distance_km",
-            "distance_m",
-            "elevation_m",
-            "distance_unit",
-            "elevation_unit",
-            "planned_tss",
-            "planned_if",
-            "planned_avg_speed",
-            "planned_calories",
-            "planned_work_kj",
-            "completed_duration_min",
-        ]:
-            if k in override:
+        for k in override_fields:
+            if k in override and override[k] is not None:
                 updated[k] = override[k]
-        if override.get("hidden"):
-            continue
         out.append(updated)
     return out
 
 
 @app.delete("/activities/{activity_id}")
 def delete_activity_local(activity_id: str) -> dict[str, bool]:
-    imported = load_imported_activities()
-    removed = next((a for a in imported if str(a.get("id")) == activity_id), None)
-    filtered = [a for a in imported if str(a.get("id")) != activity_id]
-    if len(filtered) != len(imported):
-        save_imported_activities(filtered)
-    if removed:
-        fit_id = str(removed.get("fit_id") or "").strip()
-        if fit_id:
-            parsed_path = FIT_PARSED_DIR / f"{fit_id}.json"
-            if parsed_path.exists():
-                parsed_path.unlink()
-            fit_path = Path("data/imports") / f"{fit_id}.fit"
-            if fit_path.exists():
-                fit_path.unlink()
-    overrides = load_activity_overrides()
-    current = overrides.get(activity_id, {})
-    current["hidden"] = True
-    overrides[activity_id] = current
-    save_activity_overrides(overrides)
+    with get_db() as db:
+        # Mark FIT-imported activity as hidden (don't DELETE so history is preserved)
+        db.execute(
+            "UPDATE activities SET hidden = 1 WHERE id = ?", (activity_id,)
+        )
+        # Upsert override to mark Strava activities hidden too
+        existing = db.execute(
+            "SELECT id FROM activity_overrides WHERE id = ?", (activity_id,)
+        ).fetchone()
+        if existing:
+            db.execute(
+                "UPDATE activity_overrides SET hidden = 1 WHERE id = ?", (activity_id,)
+            )
+        else:
+            db.execute(
+                "INSERT INTO activity_overrides (id, hidden) VALUES (?, 1)", (activity_id,)
+            )
 
-    # If this completed activity was paired, remove the pair.
     pairs = load_pairs()
     pairs = [p for p in pairs if str(p.get("strava_id")) != activity_id]
     save_pairs(pairs)
@@ -892,10 +1245,6 @@ async def import_fit(request: Request, filename: str = Query(default="workout.fi
         raise HTTPException(status_code=400, detail="Empty file.")
 
     file_id = str(uuid4())
-    imports_dir = Path("data/imports")
-    imports_dir.mkdir(parents=True, exist_ok=True)
-    saved_path = imports_dir / f"{file_id}.fit"
-    saved_path.write_bytes(content)
     settings = load_settings()
     try:
         parsed = parse_fit_bytes_to_json(content, settings=settings)
@@ -903,11 +1252,10 @@ async def import_fit(request: Request, filename: str = Query(default="workout.fi
         raise
     except Exception as err:
         raise HTTPException(status_code=400, detail=f"Failed to parse FIT: {err}") from err
-    save_fit_parsed(file_id, parsed)
 
     safe_name = Path(filename).name
     name = Path(safe_name).stem.replace("_", " ").replace("-", " ").strip() or "Imported Workout"
-    item = {
+    item: dict[str, Any] = {
         "id": f"imported-{file_id}",
         "name": name.title(),
         "type": "Ride",
@@ -917,11 +1265,21 @@ async def import_fit(request: Request, filename: str = Query(default="workout.fi
         "description": "",
         "source": "fit",
         "fit_id": file_id,
+        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     item = apply_parsed_fit_to_activity(item, parsed, file_id, safe_name)
-    imported = load_imported_activities()
-    imported.append(item)
-    save_imported_activities(imported)
+
+    with get_db() as db:
+        db.execute(
+            _activity_insert_sql().replace("INSERT OR IGNORE", "INSERT OR REPLACE"),
+            _activity_insert_params(
+                item,
+                content,
+                json.dumps(parsed),
+                item.get("comments_feed", []),
+                item.get("analysis_edits", {}),
+            ),
+        )
     return item
 
 
@@ -940,196 +1298,237 @@ async def upload_fit_for_activity(
     if Path(filename).suffix.lower() != ".fit":
         raise HTTPException(status_code=400, detail="Only .fit files are supported.")
 
-    imported = load_imported_activities()
-    idx = imported_activity_index(imported, activity_id)
-    if idx < 0:
+    item = get_imported_activity(activity_id)
+    if item is None:
         raise HTTPException(status_code=404, detail="Activity not found.")
 
     file_id = str(uuid4())
-    imports_dir = Path("data/imports")
-    imports_dir.mkdir(parents=True, exist_ok=True)
-    (imports_dir / f"{file_id}.fit").write_bytes(content)
     settings = load_settings()
     parsed = parse_fit_bytes_to_json(content, settings=settings)
-    save_fit_parsed(file_id, parsed)
+    item = apply_parsed_fit_to_activity(item, parsed, file_id, filename)
 
-    imported[idx] = apply_parsed_fit_to_activity(imported[idx], parsed, file_id, filename)
-    save_imported_activities(imported)
-    return imported[idx]
+    with get_db() as db:
+        db.execute(
+            """UPDATE activities SET
+                fit_id=?, fit_filename=?, fit_data=?, fit_parsed_json=?,
+                distance=?, moving_time=?, start_date_local=?, type=?,
+                if_value=?, np_value=?, tss_override=?, work_kj=?, calories=?,
+                avg_speed=?, avg_power=?, avg_hr=?, min_hr=?, max_hr=?,
+                min_power=?, max_power=?, elev_gain_m=?, hr_tss=?
+            WHERE id=?""",
+            (
+                file_id, Path(filename).name, content, json.dumps(parsed),
+                item.get("distance"), item.get("moving_time"), item.get("start_date_local"),
+                item.get("type"), item.get("if_value"), item.get("np_value"),
+                item.get("tss_override"), item.get("work_kj"), item.get("calories"),
+                item.get("avg_speed"), item.get("avg_power"), item.get("avg_hr"),
+                item.get("min_hr"), item.get("max_hr"), item.get("min_power"),
+                item.get("max_power"), item.get("elev_gain_m"), item.get("hr_tss"),
+                activity_id,
+            ),
+        )
+    return item
 
 
 @app.post("/activities/{activity_id}/fit/recalculate")
 def recalculate_fit_for_activity(activity_id: str) -> dict[str, Any]:
-    imported = load_imported_activities()
-    idx = imported_activity_index(imported, activity_id)
-    if idx < 0:
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM activities WHERE id = ?", (activity_id,)
+        ).fetchone()
+    if not row:
         raise HTTPException(status_code=404, detail="Activity not found.")
-    fit_id = str(imported[idx].get("fit_id") or "").strip()
+    fit_id = str(row["fit_id"] or "").strip()
     if not fit_id:
         raise HTTPException(status_code=400, detail="No FIT attached.")
-    fit_path = Path("data/imports") / f"{fit_id}.fit"
-    if not fit_path.exists():
-        raise HTTPException(status_code=404, detail="FIT file missing.")
+    fit_data = row["fit_data"]
+    if not fit_data:
+        raise HTTPException(status_code=404, detail="FIT file data missing.")
 
-    parsed = parse_fit_file_to_json(fit_path, settings=load_settings())
-    save_fit_parsed(fit_id, parsed)
-    filename = str(imported[idx].get("fit_filename") or f"{fit_id}.fit")
-    imported[idx] = apply_parsed_fit_to_activity(imported[idx], parsed, fit_id, filename)
-    save_imported_activities(imported)
-    return imported[idx]
+    parsed = parse_fit_bytes_to_json(bytes(fit_data), settings=load_settings())
+    item = row_to_activity(row)
+    filename = str(row["fit_filename"] or f"{fit_id}.fit")
+    item = apply_parsed_fit_to_activity(item, parsed, fit_id, filename)
+
+    with get_db() as db:
+        db.execute(
+            """UPDATE activities SET
+                fit_parsed_json=?,
+                distance=?, moving_time=?, start_date_local=?, type=?,
+                if_value=?, np_value=?, tss_override=?, work_kj=?, calories=?,
+                avg_speed=?, avg_power=?, avg_hr=?, min_hr=?, max_hr=?,
+                min_power=?, max_power=?, elev_gain_m=?, hr_tss=?
+            WHERE id=?""",
+            (
+                json.dumps(parsed),
+                item.get("distance"), item.get("moving_time"), item.get("start_date_local"),
+                item.get("type"), item.get("if_value"), item.get("np_value"),
+                item.get("tss_override"), item.get("work_kj"), item.get("calories"),
+                item.get("avg_speed"), item.get("avg_power"), item.get("avg_hr"),
+                item.get("min_hr"), item.get("max_hr"), item.get("min_power"),
+                item.get("max_power"), item.get("elev_gain_m"), item.get("hr_tss"),
+                activity_id,
+            ),
+        )
+    return item
 
 
 @app.delete("/activities/{activity_id}/fit")
 def delete_fit_for_activity(activity_id: str) -> dict[str, Any]:
-    imported = load_imported_activities()
-    idx = imported_activity_index(imported, activity_id)
-    if idx < 0:
+    item = get_imported_activity(activity_id)
+    if item is None:
         raise HTTPException(status_code=404, detail="Activity not found.")
-    fit_id = str(imported[idx].get("fit_id") or "").strip()
-    if fit_id:
-        parsed_path = FIT_PARSED_DIR / f"{fit_id}.json"
-        fit_path = Path("data/imports") / f"{fit_id}.fit"
-        if parsed_path.exists():
-            parsed_path.unlink()
-        if fit_path.exists():
-            fit_path.unlink()
-    for key in [
-        "fit_id",
-        "fit_filename",
-        "if_value",
-        "tss_override",
-        "avg_power",
-        "avg_hr",
-        "min_hr",
-        "max_hr",
-        "min_power",
-        "max_power",
-        "elev_gain_m",
-    ]:
-        imported[idx].pop(key, None)
-    save_imported_activities(imported)
-    return imported[idx]
+    with get_db() as db:
+        db.execute(
+            """UPDATE activities SET
+                fit_id=NULL, fit_filename=NULL, fit_data=NULL, fit_parsed_json=NULL,
+                if_value=NULL, tss_override=NULL, avg_power=NULL,
+                avg_hr=NULL, min_hr=NULL, max_hr=NULL,
+                min_power=NULL, max_power=NULL, elev_gain_m=NULL
+            WHERE id=?""",
+            (activity_id,),
+        )
+    for key in ("fit_id", "fit_filename", "if_value", "tss_override",
+                "avg_power", "avg_hr", "min_hr", "max_hr", "min_power", "max_power", "elev_gain_m"):
+        item.pop(key, None)
+    return item
 
 
 @app.post("/activities/{activity_id}/fit/restore")
 def restore_fit_for_activity(activity_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    imported = load_imported_activities()
-    idx = imported_activity_index(imported, activity_id)
-    if idx < 0:
+    item = get_imported_activity(activity_id)
+    if item is None:
         raise HTTPException(status_code=404, detail="Activity not found.")
-    current_fit_id = str(imported[idx].get("fit_id") or "").strip()
-    restore_fit_id = str(payload.get("fit_id") or "").strip()
-    if current_fit_id and current_fit_id != restore_fit_id:
-        current_fit_path = Path("data/imports") / f"{current_fit_id}.fit"
-        current_parsed_path = FIT_PARSED_DIR / f"{current_fit_id}.json"
-        if current_fit_path.exists():
-            current_fit_path.unlink()
-        if current_parsed_path.exists():
-            current_parsed_path.unlink()
-    for key in [
-        "fit_id",
-        "fit_filename",
-        "distance",
-        "moving_time",
-        "avg_power",
-        "avg_hr",
-        "min_hr",
-        "max_hr",
-        "min_power",
-        "max_power",
-        "elev_gain_m",
-        "if_value",
-        "tss_override",
-    ]:
-        if key in payload:
-            imported[idx][key] = payload.get(key)
-    save_imported_activities(imported)
-    return imported[idx]
+
+    fields = ["fit_id", "fit_filename", "distance", "moving_time", "avg_power",
+              "avg_hr", "min_hr", "max_hr", "min_power", "max_power", "elev_gain_m",
+              "if_value", "tss_override"]
+    updates = {k: payload[k] for k in fields if k in payload}
+    if updates:
+        set_clause = ", ".join(f"{k}=?" for k in updates)
+        with get_db() as db:
+            db.execute(
+                f"UPDATE activities SET {set_clause} WHERE id=?",
+                (*updates.values(), activity_id),
+            )
+        item.update(updates)
+    return item
 
 
 @app.get("/activities/{activity_id}/fit/download")
-def download_fit_for_activity(activity_id: str) -> FileResponse:
-    imported = load_imported_activities()
-    idx = imported_activity_index(imported, activity_id)
-    if idx < 0:
+async def download_fit_for_activity(activity_id: str):
+    from fastapi.responses import Response
+    with get_db() as db:
+        row = db.execute(
+            "SELECT fit_data, fit_filename, fit_id FROM activities WHERE id = ?", (activity_id,)
+        ).fetchone()
+    if not row:
         raise HTTPException(status_code=404, detail="Activity not found.")
-    fit_id = str(imported[idx].get("fit_id") or "").strip()
-    if not fit_id:
+    if not row["fit_data"]:
         raise HTTPException(status_code=404, detail="No FIT attached.")
-    fit_path = Path("data/imports") / f"{fit_id}.fit"
-    if not fit_path.exists():
-        raise HTTPException(status_code=404, detail="FIT file missing.")
-    filename = str(imported[idx].get("fit_filename") or f"{fit_id}.fit")
-    return FileResponse(path=str(fit_path), filename=filename, media_type="application/octet-stream")
+    filename = str(row["fit_filename"] or f"{row['fit_id']}.fit")
+    return Response(
+        content=bytes(row["fit_data"]),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.put("/activities/{activity_id}/meta")
 def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, bool]:
-    overrides = load_activity_overrides()
-    current = overrides.get(activity_id, {})
+    updates: dict[str, Any] = {}
+
     if "description" in payload:
-        current["description"] = str(payload.get("description", ""))
+        updates["description"] = str(payload.get("description", ""))
     if "comments" in payload:
-        current["comments"] = str(payload.get("comments", ""))
+        updates["comments"] = str(payload.get("comments", ""))
     if "comments_feed" in payload:
         raw_feed = payload.get("comments_feed")
         if isinstance(raw_feed, list):
-            current["comments_feed"] = [str(x).strip() for x in raw_feed if str(x).strip()]
+            updates["comments_feed"] = json.dumps([str(x).strip() for x in raw_feed if str(x).strip()])
     if "title" in payload:
-        current["title"] = str(payload.get("title", "")).strip()
+        updates["title"] = str(payload.get("title", "")).strip()
     if "type" in payload:
-        current["type"] = str(payload.get("type", "")).strip()
+        updates["type"] = str(payload.get("type", "")).strip()
     if "feel" in payload:
         try:
-            current["feel"] = max(0, min(5, int(payload.get("feel") or 0)))
+            updates["feel"] = max(0, min(5, int(payload.get("feel") or 0)))
         except (TypeError, ValueError):
-            current["feel"] = 0
+            updates["feel"] = 0
     if "rpe" in payload:
         try:
-            current["rpe"] = max(0, min(10, int(payload.get("rpe") or 0)))
+            updates["rpe"] = max(0, min(10, int(payload.get("rpe") or 0)))
         except (TypeError, ValueError):
-            current["rpe"] = 0
+            updates["rpe"] = 0
     if "if_value" in payload:
-        current["if_value"] = _as_float(payload.get("if_value"))
+        updates["if_value"] = _as_float(payload.get("if_value"))
     if "tss_override" in payload:
-        current["tss_override"] = _as_float(payload.get("tss_override"))
-    for key in [
-        "duration_min",
-        "distance_km",
-        "distance_m",
-        "elevation_m",
-        "planned_tss",
-        "planned_if",
-        "planned_avg_speed",
-        "planned_calories",
-        "planned_work_kj",
-        "completed_duration_min",
-    ]:
+        updates["tss_override"] = _as_float(payload.get("tss_override"))
+    for key in ("duration_min", "distance_km", "distance_m", "elevation_m",
+                "planned_tss", "planned_if", "planned_avg_speed", "planned_calories",
+                "planned_work_kj", "completed_duration_min"):
         if key in payload:
-            current[key] = _as_float(payload.get(key))
+            updates[key] = _as_float(payload.get(key))
     if "distance_unit" in payload:
         unit = str(payload.get("distance_unit") or "").strip().lower()
         if unit in {"km", "mi", "m"}:
-            current["distance_unit"] = unit
+            updates["distance_unit"] = unit
     if "elevation_unit" in payload:
         unit = str(payload.get("elevation_unit") or "").strip().lower()
         if unit in {"m", "ft"}:
-            current["elevation_unit"] = unit
+            updates["elevation_unit"] = unit
+    if "tss_source" in payload:
+        src = str(payload.get("tss_source") or "").strip()
+        if src in {"power", "hr"}:
+            updates["tss_source"] = src
+        elif src == "":
+            updates["tss_source"] = None
     if "analysis_edits" in payload:
         raw_analysis = payload.get("analysis_edits")
         if isinstance(raw_analysis, dict):
             deleted = raw_analysis.get("deletedChannels", [])
             cuts = raw_analysis.get("cuts", [])
-            current["analysis_edits"] = {
+            updates["analysis_edits"] = json.dumps({
                 "deletedChannels": [str(x) for x in deleted if isinstance(x, str)],
                 "cuts": [
                     {"startSec": max(0.0, float(c.get("startSec", 0) or 0)), "endSec": max(0.0, float(c.get("endSec", 0) or 0))}
-                    for c in cuts
-                    if isinstance(c, dict)
+                    for c in cuts if isinstance(c, dict)
                 ],
-            }
-    overrides[activity_id] = current
-    save_activity_overrides(overrides)
+            })
+
+    if not updates:
+        return {"ok": True}
+
+    with get_db() as db:
+        # Check if this is a FIT-imported activity
+        is_fit = db.execute(
+            "SELECT id FROM activities WHERE id = ?", (activity_id,)
+        ).fetchone()
+
+        if is_fit:
+            set_clause = ", ".join(f"{k}=?" for k in updates)
+            db.execute(
+                f"UPDATE activities SET {set_clause} WHERE id=?",
+                (*updates.values(), activity_id),
+            )
+        else:
+            # Strava/external activity — use overrides table
+            existing = db.execute(
+                "SELECT * FROM activity_overrides WHERE id = ?", (activity_id,)
+            ).fetchone()
+            if existing:
+                set_clause = ", ".join(f"{k}=?" for k in updates)
+                db.execute(
+                    f"UPDATE activity_overrides SET {set_clause} WHERE id=?",
+                    (*updates.values(), activity_id),
+                )
+            else:
+                cols = ["id"] + list(updates.keys())
+                placeholders = ", ".join("?" for _ in cols)
+                db.execute(
+                    f"INSERT INTO activity_overrides ({', '.join(cols)}) VALUES ({placeholders})",
+                    (activity_id, *updates.values()),
+                )
     return {"ok": True}
 
 

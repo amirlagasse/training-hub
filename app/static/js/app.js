@@ -366,6 +366,34 @@
       return ftp > 0 ? ftp : null;
     }
 
+    function lthrForActivity(activity) {
+      const lthr = appSettings.lthr || {};
+      const key = activitySportKey(activity);
+      const v = Number(lthr[key] || lthr.global || 0);
+      return v > 0 ? v : null;
+    }
+
+    // Coggan zone upper-bound percentages of LTHR (Z1–Z4; Z5 = above last)
+    const HR_ZONE_BOUNDS = [68, 84, 95, 106];
+    const HR_ZONE_RATES  = [30, 55, 70, 90, 110]; // TSS/hr per zone
+
+    function calcHrTss(activity) {
+      // Use pre-calculated value from FIT parsing when available
+      const preCalc = Number(activity.hr_tss || 0);
+      if (preCalc > 0) return preCalc;
+      // Estimate from avg HR + duration (Strava activities without FIT)
+      const lthr = lthrForActivity(activity);
+      if (!lthr) return null;
+      const avgHr = Number(activity.avg_heartrate || activity.avg_hr || 0);
+      if (!avgHr) return null;
+      const durationH = Number(activity.moving_time || 0) / 3600;
+      if (durationH <= 0) return null;
+      const pct = (avgHr / lthr) * 100;
+      const zoneIdx = HR_ZONE_BOUNDS.findIndex(b => pct < b);
+      const rate = HR_ZONE_RATES[zoneIdx === -1 ? 4 : zoneIdx];
+      return durationH * rate;
+    }
+
     function estimateTss(durationMin, intensity) {
       const durH = Math.max(0, Number(durationMin || 0)) / 60;
       const ifac = Math.max(0.2, Number(intensity || 0.7));
@@ -376,7 +404,12 @@
       if (Number(activity.tss_override || 0) > 0) return Number(activity.tss_override);
       const ifv = activityIF(activity);
       const durationH = Number(activity.moving_time || 0) / 3600;
-      if (ifv && durationH > 0) return durationH * ifv * ifv * 100;
+      const powerTss = (ifv && durationH > 0) ? durationH * ifv * ifv * 100 : null;
+      const hrTss = calcHrTss(activity);
+      if (activity.tss_source === 'hr' && hrTss) return hrTss;
+      if (activity.tss_source === 'power' && powerTss) return powerTss;
+      if (powerTss) return powerTss;
+      if (hrTss) return hrTss;
       return estimateTss(Number(activity.moving_time || 0) / 60, intensityByType(activity.type || 'Other'));
     }
 
@@ -1680,6 +1713,7 @@
             rpe: rpeOut,
             if_value: completedIf,
             tss_override: completedTss,
+            tss_source: (modalDraft && modalDraft.tssSource) || '',
             duration_min: plannedDuration,
             distance_km: plannedDistanceM / 1000,
             distance_m: plannedDistanceM,
@@ -1813,10 +1847,30 @@
       const fitComputedTss = Number((data.tss_override ?? completedTssRaw) || 0);
       const completedNp = fitComputedNp > 0 ? fitComputedNp : null;
       let completedIf = fitComputedIf > 0 ? fitComputedIf : null;
-      let completedTss = fitComputedTss > 0 ? fitComputedTss : null;
-      if (isCycling && !completedNp) {
-        completedIf = null;
-        completedTss = null;
+      const powerTssValue = (isCycling && !completedNp) ? null : (fitComputedTss > 0 ? fitComputedTss : null);
+      const hrTssValue = calcHrTss(data);
+      const hasBothTss = !!(powerTssValue && hrTssValue);
+      let activeTssSource = data.tss_source || (powerTssValue ? 'power' : 'hr');
+      let completedTss = activeTssSource === 'hr' ? (hrTssValue || powerTssValue) : (powerTssValue || hrTssValue);
+      if (!completedTss) completedTss = null;
+      if (isCycling && !completedNp) completedIf = null;
+
+      // TSS source toggle — shown only when both power and hrTSS are available
+      const tssSourceRow = document.getElementById('wvTssSourceRow');
+      tssSourceRow.style.display = hasBothTss ? '' : 'none';
+      if (hasBothTss) {
+        document.querySelectorAll('#wvTssSourceToggle .seg-btn').forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.source === activeTssSource);
+          btn.onclick = () => {
+            activeTssSource = btn.dataset.source;
+            completedTss = activeTssSource === 'hr' ? hrTssValue : powerTssValue;
+            document.querySelectorAll('#wvTssSourceToggle .seg-btn').forEach(b => b.classList.toggle('active', b.dataset.source === activeTssSource));
+            document.getElementById('pcTssComp').value = completedTss ? String(Math.round(completedTss)) : '';
+            document.getElementById('wvHeaderTss').textContent = completedTss ? `${Math.round(completedTss)} TSS` : '-- TSS';
+            if (modalDraft) modalDraft.tssSource = activeTssSource;
+          };
+        });
+        if (modalDraft) modalDraft.tssSource = activeTssSource;
       }
       const completedWorkKj = Number((data.work_kj ?? plannedObj.completed_work_kj ?? 0) || 0);
       const completedCalories = Number((data.calories ?? plannedObj.completed_calories ?? 0) || 0);
