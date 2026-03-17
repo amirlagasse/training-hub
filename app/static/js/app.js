@@ -64,6 +64,7 @@
 
     const ICON_ASSETS = {
       run: '/icons/workouts/run.png',
+      ride: '/icons/workouts/bike.png',
       bike: '/icons/workouts/bike.png',
       swim: '/icons/workouts/swim.png',
       brick: '/icons/workouts/brick.png',
@@ -73,6 +74,7 @@
       strength: '/icons/workouts/strength.png',
       timer: '/icons/workouts/other_custom.png',
       ski: '/icons/workouts/XC_Ski.png',
+      row: '/icons/workouts/row.png',
       rowing: '/icons/workouts/row.png',
       walk: '/icons/workouts/walk.png',
       other: '/icons/workouts/other_custom.png',
