@@ -88,6 +88,7 @@
     let activities = [];
     let calendarItems = [];
     let pairs = [];
+    let currentDragData = null; // tracks active drag payload reliably
     let selectedDate = todayKey();
     let selectedKind = 'workout';
     let selectedWorkoutType = 'Run';
@@ -1086,6 +1087,78 @@
 
       if (!opts.length) return;
       openContextMenu(ev.clientX, ev.clientY, opts);
+    }
+
+    function confirmAndPair(plannedId, stravaId) {
+      if (localStorage.getItem('pair_skip_confirm') === 'true') {
+        pairWorkouts(plannedId, stravaId);
+        return;
+      }
+      const planned = calendarItems.find(i => String(i.id) === String(plannedId));
+      const completed = activities.find(a => String(a.id) === String(stravaId));
+
+      const cDur  = hms(Number(completed && completed.moving_time || 0));
+      const cDist = completed ? fmtDistanceMeters(Number(completed.distance || 0)) : '--';
+      const cTss  = completed ? Math.round(activityToTss(completed)) : 0;
+      const pDur  = planned ? formatDurationClockCompact(Number(planned.duration_min || 0)) : '--';
+      const sportKey = planned ? workoutTypeSportKey(planned.workout_type) : 'other';
+      const iconSrc = ICON_ASSETS[sportKey] || ICON_ASSETS.other;
+      const type = (planned && planned.workout_type) || (completed && completed.type) || 'Workout';
+
+      const overlay = document.createElement('div');
+      overlay.className = 'pair-confirm-overlay';
+      overlay.innerHTML = `
+        <div class="pair-confirm-modal">
+          <h3 class="pair-confirm-title">Are you sure you want to pair these workouts?</h3>
+          <p class="pair-confirm-sub">Pairing will attach the completed workout to the planned workout. All of your data, descriptions, and comments will remain intact.</p>
+          <div class="pair-confirm-preview">
+            <div class="pair-preview-col">
+              <p class="pair-preview-label">Completed</p>
+              <div class="pair-preview-card pair-preview-done">
+                <img src="${iconSrc}" class="pair-preview-icon" />
+                <strong>${type}</strong>
+                <span>${cDur}&#10003;</span>
+                <span>${cDist}</span>
+                <span>${cTss} TSS</span>
+              </div>
+              <p class="pair-preview-label" style="margin-top:10px;">Planned</p>
+              <div class="pair-preview-card pair-preview-planned">
+                <img src="${iconSrc}" class="pair-preview-icon" />
+                <span>${pDur}</span>
+              </div>
+            </div>
+            <div class="pair-confirm-arrow">&#8594;</div>
+            <div class="pair-preview-col">
+              <div class="pair-preview-card pair-preview-merged">
+                <img src="${iconSrc}" class="pair-preview-icon" />
+                <span>${cDur}&#10003;</span>
+                <span>${cDist}</span>
+                <span>${cTss} TSS</span>
+                <span class="pair-preview-planned-line">P: ${pDur}</span>
+              </div>
+              <p class="pair-preview-label pair-label-merged">Planned and<br>Completed</p>
+            </div>
+          </div>
+          <label class="pair-confirm-skip">
+            <input type="checkbox" id="pairSkipCheck" /> Don't show this again
+          </label>
+          <div class="pair-confirm-btns">
+            <button class="btn-secondary" id="pairCancelBtn">Cancel</button>
+            <button class="btn-primary" id="pairConfirmBtn">Pair</button>
+          </div>
+        </div>`;
+
+      document.body.appendChild(overlay);
+
+      overlay.querySelector('#pairCancelBtn').addEventListener('click', () => overlay.remove());
+      overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
+      overlay.querySelector('#pairConfirmBtn').addEventListener('click', async () => {
+        if (overlay.querySelector('#pairSkipCheck').checked) {
+          localStorage.setItem('pair_skip_confirm', 'true');
+        }
+        overlay.remove();
+        await pairWorkouts(plannedId, stravaId);
+      });
     }
 
     async function pairWorkouts(plannedId, stravaId) {
@@ -3515,6 +3588,23 @@
           dayHead.appendChild(num);
           cell.appendChild(dayHead);
 
+          // Cell-level drag fallback: catches drops anywhere in the day cell
+          cell.addEventListener('dragover', (ev) => ev.preventDefault());
+          cell.addEventListener('drop', (ev) => {
+            ev.preventDefault();
+            const dragData = currentDragData;
+            if (!dragData || dragData.source !== 'strava') return;
+            // Remove any lingering drop-target highlights
+            cell.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+            // Find the single unpaired planned workout for this day
+            const unpairedPlanned = calendarItems.filter(i =>
+              i.kind === 'workout' && i.date === key && !pairByPlannedId.get(String(i.id))
+            );
+            if (unpairedPlanned.length === 1) {
+              confirmAndPair(String(unpairedPlanned[0].id), String(dragData.id));
+            }
+          });
+
           const entries = dayMap[key] || { done: [], items: [] };
           const shownCompleted = new Set();
           const cardsToShow = [];
@@ -3646,23 +3736,25 @@
               card.dataset.kind = 'planned';
               card.dataset.plannedId = String(item.id);
               card.addEventListener('dragstart', (ev) => {
-                ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'planned', id: String(item.id) }));
+                currentDragData = { source: 'planned', id: String(item.id) };
+                ev.dataTransfer.setData('text/plain', JSON.stringify(currentDragData));
                 card.classList.add('dragging-active');
               });
-              card.addEventListener('dragend', () => card.classList.remove('dragging-active'));
+              card.addEventListener('dragend', () => { currentDragData = null; card.classList.remove('dragging-active'); });
               card.addEventListener('dragover', (ev) => ev.preventDefault());
               card.addEventListener('dragenter', (ev) => {
                 ev.preventDefault();
                 if (!completed) card.classList.add('drop-target');
               });
-              card.addEventListener('dragleave', () => card.classList.remove('drop-target'));
-              card.addEventListener('drop', async (ev) => {
+              card.addEventListener('dragleave', (ev) => {
+                if (!card.contains(ev.relatedTarget)) card.classList.remove('drop-target');
+              });
+              card.addEventListener('drop', (ev) => {
                 ev.preventDefault();
+                ev.stopPropagation();
                 card.classList.remove('drop-target');
-                const raw = ev.dataTransfer.getData('text/plain');
-                if (!raw) return;
-                const dragData = JSON.parse(raw);
-                if (dragData.source === 'strava') await pairWorkouts(String(item.id), String(dragData.id));
+                const dragData = currentDragData;
+                if (dragData && dragData.source === 'strava') confirmAndPair(String(item.id), String(dragData.id));
               });
               card.addEventListener('click', (ev) => {
                 ev.stopPropagation();
@@ -3714,26 +3806,28 @@
             card.dataset.kind = 'strava';
             card.dataset.stravaId = String(a.id);
             card.addEventListener('dragstart', (ev) => {
-              ev.dataTransfer.setData('text/plain', JSON.stringify({ source: 'strava', id: String(a.id) }));
+              currentDragData = { source: 'strava', id: String(a.id) };
+              ev.dataTransfer.setData('text/plain', JSON.stringify(currentDragData));
               card.classList.add('dragging-active');
             });
-            card.addEventListener('dragend', () => card.classList.remove('dragging-active'));
+            card.addEventListener('dragend', () => { currentDragData = null; card.classList.remove('dragging-active'); });
             card.addEventListener('dragover', (ev) => ev.preventDefault());
             card.addEventListener('dragenter', (ev) => {
               ev.preventDefault();
               card.classList.add('drop-target');
             });
-            card.addEventListener('dragleave', () => card.classList.remove('drop-target'));
-            card.addEventListener('drop', async (ev) => {
+            card.addEventListener('dragleave', (ev) => {
+              if (!card.contains(ev.relatedTarget)) card.classList.remove('drop-target');
+            });
+            card.addEventListener('drop', (ev) => {
               ev.preventDefault();
+              ev.stopPropagation();
               card.classList.remove('drop-target');
-              const raw = ev.dataTransfer.getData('text/plain');
-              if (!raw) return;
-              const dragData = JSON.parse(raw);
-              if (dragData.source === 'planned') {
+              const dragData = currentDragData;
+              if (dragData && dragData.source === 'planned') {
                 const draggedPlanned = calendarItems.find((i) => String(i.id) === String(dragData.id));
                 if (compStat === 'unplanned' && hasPlannedAndCompletedContent(draggedPlanned)) return;
-                await pairWorkouts(String(dragData.id), String(a.id));
+                confirmAndPair(String(dragData.id), String(a.id));
               }
             });
             card.addEventListener('click', (ev) => {
@@ -4046,9 +4140,27 @@
         ev.stopPropagation();
         accountMenu.classList.toggle('hidden');
       });
-      document.getElementById('accountSettingsBtn').addEventListener('click', () => {
+      document.getElementById('accountSettingsBtn').addEventListener('click', async () => {
         accountMenu.classList.add('hidden');
         document.getElementById('settingsModal').classList.add('open');
+        try {
+          const res = await fetch('/strava-status');
+          const data = await res.json();
+          const dot = document.getElementById('stravaStatusDot');
+          const label = document.getElementById('stravaStatusLabel');
+          const btn = document.getElementById('stravaConnectBtn');
+          if (data.connected) {
+            dot.style.background = '#17733e';
+            label.textContent = data.athlete_name ? `Connected as ${data.athlete_name}` : 'Connected';
+            btn.textContent = 'Reconnect';
+          } else {
+            dot.style.background = '#cc4b37';
+            label.textContent = 'Not connected';
+            btn.textContent = 'Connect Strava';
+          }
+        } catch {
+          document.getElementById('stravaStatusLabel').textContent = 'Unable to check status';
+        }
       });
     }
     document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((btn) => {
