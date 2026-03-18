@@ -3332,7 +3332,7 @@
     }
 
     @media (max-width: 1450px) {
-      .home-grid { grid-template-columns: 260px 1fr 330px; }
+      .home-grid { grid-template-columns: 240px 1fr 320px; }
       .calendar-week-header,
       .week-row { grid-template-columns: repeat(7, minmax(0, 1fr)) 176px; }
       .m-title { font-size: 46px; }
@@ -3360,4 +3360,258 @@
       .m-title { font-size: 34px; }
       .section-label { font-size: 28px; }
       .type-btn { font-size: 24px; }
+    }
+
+    /* ── Home user row ── */
+    .home-user-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 2px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 14px;
+      user-select: none;
+    }
+    .home-user-row:hover { color: var(--blue); }
+    .home-user-icon { font-size: 16px; line-height: 1; }
+
+    /* ── Home sections (clean, line-based) ── */
+    .home-aside-left,
+    .home-main-col {
+      display: flex;
+      flex-direction: column;
+    }
+    .home-section {
+      padding-bottom: 14px;
+      margin-bottom: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .home-section:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+    .home-section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 8px;
+      margin-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+    }
+    .home-section-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.45px;
+      color: var(--muted);
+    }
+
+    /* ── Home grid updated ── */
+    .home-grid {
+      display: grid;
+      grid-template-columns: 280px 1fr 360px;
+      gap: 16px;
+      align-items: start;
+    }
+
+    /* ── Fitness metric chips ── */
+    .fitness-metric-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .fitness-chip {
+      border-radius: 9px;
+      color: #fff;
+      text-align: center;
+      padding: 10px 6px;
+    }
+    .fitness-chip .num {
+      display: block;
+      font-size: 26px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .fitness-chip .lbl {
+      display: block;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.35px;
+      margin-top: 3px;
+      opacity: 0.88;
+    }
+
+    /* ── Fitness graphs 2×2 grid ── */
+    .fitness-graphs-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .fitness-graph-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--panel);
+      position: relative;
+      box-shadow: var(--shadow);
+    }
+    .fitness-graph-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+    .fitness-graph-canvas {
+      position: relative;
+      height: 60px;
+    }
+    .fitness-graph-canvas svg {
+      display: block;
+      width: 100%;
+      height: 60px;
+      overflow: visible;
+    }
+    .fitness-hover-tooltip {
+      position: absolute;
+      background: rgba(12,28,46,0.88);
+      color: #e8f0fb;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 10px;
+      line-height: 1.5;
+      pointer-events: none;
+      white-space: nowrap;
+      z-index: 10;
+      display: none;
+    }
+
+    /* ── Settings appearance row ── */
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      color: var(--text);
+      padding: 2px 0 8px;
+    }
+
+    /* ── Dark mode: Today calendar highlight fix ── */
+    [data-theme="dark"] .day.today .day-head {
+      background: #1f5bd7 !important;
+      border-bottom-color: #1f5bd7 !important;
+    }
+    [data-theme="dark"] .day.today .d-num {
+      color: #fff !important;
+    }
+
+    /* ── Dark mode: Analyze channel items ── */
+    [data-theme="dark"] .analyze-channel-item {
+      background: #1e2530;
+      border-color: var(--line);
+      color: var(--muted);
+    }
+    [data-theme="dark"] .analyze-channel-item.active {
+      color: #fff;
+      border-color: transparent;
+    }
+
+    /* ── Dark mode: Analyze apply bar ── */
+    [data-theme="dark"] .analyze-apply-bar {
+      background: var(--panel);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    /* ── Dark mode: Channel popup ── */
+    [data-theme="dark"] .channel-popup {
+      background: var(--panel);
+      border-color: var(--line);
+      box-shadow: 0 10px 22px rgba(0,0,0,0.5);
+    }
+    [data-theme="dark"] .channel-popup button {
+      color: var(--text);
+    }
+    [data-theme="dark"] .channel-popup button:hover {
+      background: rgba(255,255,255,0.07);
+    }
+    [data-theme="dark"] .channel-popup button.ch-danger {
+      color: #f85149;
+    }
+
+    /* ── Dark mode: Brighter channel legend colors ── */
+    [data-theme="dark"] .l-hr  { color: #ff8080; }
+    [data-theme="dark"] .l-pwr { color: #ff88f5; }
+    [data-theme="dark"] .l-cad { color: #ffb84f; }
+    [data-theme="dark"] .l-spd { color: #5fc866; }
+
+    /* ── Dark mode: Workout icons visibility ── */
+    [data-theme="dark"] .type-icon img {
+      filter: brightness(0) invert(0.85);
+    }
+    [data-theme="dark"] .wc-icon img {
+      filter: brightness(0) invert(0.85);
+    }
+
+    /* ── Dark mode: Fitness graph boxes ── */
+    [data-theme="dark"] .fitness-graph-box {
+      background: var(--panel);
+      border-color: var(--line);
+    }
+    [data-theme="dark"] .home-section {
+      border-color: var(--line);
+    }
+    [data-theme="dark"] .home-section-head {
+      border-color: var(--line);
+    }
+
+    /* ── Zones alignment improvements ── */
+    .zone-row {
+      display: grid;
+      grid-template-columns: 18px 8px 1fr;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text);
+      padding: 2px 0;
+    }
+    .zone-num {
+      font-weight: 700;
+      text-align: right;
+      color: var(--muted);
+    }
+    .zone-range {
+      font-weight: 600;
+      text-align: right;
+    }
+    .zone-bar-pip {
+      display: inline-block;
+      width: 6px;
+      height: 14px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .zone-row-hr {
+      display: grid;
+      grid-template-columns: 1fr 8px auto;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text);
+      padding: 2px 0;
+    }
+    .zone-name { text-align: left; color: var(--text); }
+
+    @media (max-width: 1450px) {
+      .home-grid { grid-template-columns: 240px 1fr 320px; }
+    }
+    @media (max-width: 1200px) {
+      .home-grid { grid-template-columns: 1fr; }
     }

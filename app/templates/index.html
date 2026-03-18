@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260316h" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260317a" />
 </head>
 <body>
   <header class="top-nav">
@@ -22,10 +22,7 @@
     </nav>
     <div class="nav-right">
       <input id="uploadFitInput" type="file" accept=".fit" style="display:none;" />
-      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
-        <span class="theme-icon"></span>
-      </button>
-      <div class="account-wrap" id="accountWrap">
+<div class="account-wrap" id="accountWrap">
         <button class="account-btn" id="accountMenuBtn" type="button" aria-label="Account menu">
           <span class="account-icon" aria-hidden="true">&#128100;</span>
           <span>Amelia Gas</span>
@@ -43,75 +40,79 @@
     </div>
 
     <section id="view-home" class="view active">
+      <div class="home-user-row" id="homeUserRow">
+        <span class="home-user-icon" aria-hidden="true">&#128100;</span>
+        <span class="home-username">Amelia Gas</span>
+      </div>
       <div class="home-grid">
-        <aside class="stack">
-          <div class="panel">
-            <h3 class="panel-title">
-              <span>Events</span>
+        <aside class="home-aside-left">
+          <div class="home-section">
+            <div class="home-section-head">
+              <span class="home-section-title">Events</span>
               <button class="plus-btn" id="addEventBtn">+</button>
-            </h3>
+            </div>
             <div id="eventsList"></div>
           </div>
-
-          <div class="panel">
-            <h3 class="panel-title">
-              <span>Goals</span>
+          <div class="home-section">
+            <div class="home-section-head">
+              <span class="home-section-title">Goals</span>
               <button class="goal-btn" id="addGoalBtn">Add Goal</button>
-            </h3>
+            </div>
             <div id="goalsList"></div>
           </div>
         </aside>
-
-        <section class="stack">
-          <div class="panel" style="padding:0;overflow:hidden;">
-            <h3 class="panel-title" style="padding:14px 16px 12px;margin:0;border-bottom:1px solid var(--line);">
-              <span>Today</span>
+        <section class="home-main-col">
+          <div class="home-section">
+            <div class="home-section-head">
+              <span class="home-section-title">Today</span>
               <button class="plus-btn" id="addTodayBtn">+</button>
-            </h3>
+            </div>
             <div id="todayFeed"></div>
           </div>
-          <div class="panel" id="trainingZonesPanel" style="display:none;">
-            <h3 class="panel-title" style="justify-content:center;"><span>Today's Training Zones</span></h3>
+          <div class="home-section">
+            <div class="home-section-head">
+              <span class="home-section-title">Tomorrow</span>
+            </div>
+            <div id="tomorrowFeed"></div>
+          </div>
+          <div class="home-section" id="trainingZonesPanel" style="display:none;">
+            <div class="home-section-head" style="justify-content:center;">
+              <span class="home-section-title">Today's Training Zones</span>
+            </div>
             <div id="trainingZonesGrid"></div>
           </div>
         </section>
-
-        <aside class="panel">
-          <h3 class="panel-title"><span>Performance Metrics</span></h3>
-          <div class="metric-row">
-            <div class="metric-chip chip-ctl">
-              <span class="num" id="ctlVal">0</span>
-              <span class="lbl">Fitness (CTL)</span>
-            </div>
-            <div class="metric-chip chip-atl">
+        <aside class="home-fitness-col">
+          <div class="fitness-metric-row">
+            <div class="fitness-chip chip-atl">
               <span class="num" id="atlVal">0</span>
-              <span class="lbl">Fatigue (ATL)</span>
+              <span class="lbl">Fatigue</span>
             </div>
-            <div class="metric-chip chip-tsb">
+            <div class="fitness-chip chip-ctl">
+              <span class="num" id="ctlVal">0</span>
+              <span class="lbl">Fitness</span>
+            </div>
+            <div class="fitness-chip chip-tsb">
               <span class="num" id="tsbVal">0</span>
-              <span class="lbl">Form (TSB)</span>
+              <span class="lbl">Form</span>
             </div>
           </div>
-
-          <div class="explain">
-            Training Stress Score (TSS) is estimated from duration and intensity (placeholder formula).<br/><br/>
-            Fitness (CTL) is a 42-day rolling average of daily TSS.<br/>
-            Fatigue (ATL) is a 7-day rolling average of daily TSS.<br/>
-            Form (TSB) is yesterday's CTL minus yesterday's ATL.
-          </div>
-
-          <div class="spark-wrap">
-            <div class="spark-box">
-              <div class="spark-head"><span>Fitness Trend</span><strong id="ctlTrend">0</strong></div>
-              <div class="sparkline" id="ctlSpark"></div>
+          <div class="fitness-graphs-grid">
+            <div class="fitness-graph-box">
+              <div class="fitness-graph-label">7 days</div>
+              <div class="fitness-graph-canvas" id="fitnessGraph7"></div>
             </div>
-            <div class="spark-box">
-              <div class="spark-head"><span>Fatigue Trend</span><strong id="atlTrend">0</strong></div>
-              <div class="sparkline" id="atlSpark"></div>
+            <div class="fitness-graph-box">
+              <div class="fitness-graph-label">20 days</div>
+              <div class="fitness-graph-canvas" id="fitnessGraph20"></div>
             </div>
-            <div class="spark-box">
-              <div class="spark-head"><span>Form Trend</span><strong id="tsbTrend">0</strong></div>
-              <div class="sparkline" id="tsbSpark"></div>
+            <div class="fitness-graph-box">
+              <div class="fitness-graph-label">90 days</div>
+              <div class="fitness-graph-canvas" id="fitnessGraph90"></div>
+            </div>
+            <div class="fitness-graph-box">
+              <div class="fitness-graph-label">365 days</div>
+              <div class="fitness-graph-canvas" id="fitnessGraph365"></div>
             </div>
           </div>
         </aside>
@@ -220,6 +221,14 @@
           <span id="stravaStatusLabel" class="meta">Checking...</span>
           <a id="stravaConnectBtn" href="/connect" class="btn secondary" style="margin-left:auto;">Connect Strava</a>
         </div>
+        <h3 class="panel-title" style="margin:18px 0 8px;"><span>Appearance</span></h3>
+        <div class="setting-row">
+          <span>Theme</span>
+          <div class="seg-toggle" id="themeSettingToggle">
+            <button type="button" class="seg-btn" data-theme-val="light">Light</button>
+            <button type="button" class="seg-btn" data-theme-val="dark">Dark</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -251,6 +260,7 @@
             <div class="mini-chip atl" id="miniAtl">Fatigue 0</div>
             <div class="mini-chip tsb" id="miniTsb">Form 0</div>
           </div>
+          <button class="icon-btn" id="closeDetail">&times;</button>
         </div>
 
         <div class="detail-body">
@@ -426,7 +436,6 @@
 
         <div class="modal-footer">
           <button class="btn ghost" id="deleteDetail">Delete</button>
-          <button class="btn ghost" id="cancelDetail">Cancel</button>
           <button class="btn secondary" id="saveDetail">Save</button>
           <button class="btn primary" id="saveCloseDetail">Save &amp; Close</button>
         </div>
@@ -747,6 +756,6 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js?v=20260316h"></script>
+    <script src="/static/js/app.js?v=20260317a"></script>
 </body>
 </html>

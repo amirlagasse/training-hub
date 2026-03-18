@@ -103,6 +103,7 @@
     let fitUploadTargetActivityId = null;
     let fitUploadContext = 'global';
     let modalDraft = null;
+    let detailInitialState = null;
     let workoutModalSession = 0;
     const calendarState = {
       anchorDate: todayKey(),
@@ -325,7 +326,7 @@
       document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
       document.getElementById('view-' + name).classList.add('active');
       const pageHead = document.querySelector('.page-head');
-      if (pageHead) pageHead.classList.toggle('hidden', name === 'calendar');
+      if (pageHead) pageHead.classList.toggle('hidden', name === 'calendar' || name === 'home');
       document.getElementById('pageTitle').textContent = name.charAt(0).toUpperCase() + name.slice(1);
       if (name === 'calendar') {
         if (!calendarState.hasRendered) {
@@ -623,17 +624,128 @@
       });
     }
 
+    function buildCtlSeriesForDays(days) {
+      const observed = buildObservedDailyTssMap();
+      const today = parseDateKey(todayKey());
+      const warmup = 120;
+      const totalDays = days + warmup;
+      const start = new Date(today);
+      start.setDate(today.getDate() - totalDays + 1);
+      const values = [];
+      const dateKeys = [];
+      for (let i = 0; i < totalDays; i++) {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        const key = dateKeyFromDate(d);
+        values.push(Number(observed[key] || 0));
+        dateKeys.push(key);
+      }
+      let ctlPrev = 0;
+      let atlPrev = 0;
+      const ctlSeries = [];
+      const keySeries = [];
+      for (let i = 0; i < values.length; i++) {
+        const tss = values[i];
+        const ctl = ctlPrev + (tss - ctlPrev) / 42;
+        const atl = atlPrev + (tss - atlPrev) / 7;
+        ctlPrev = ctl;
+        atlPrev = atl;
+        if (i >= warmup) {
+          ctlSeries.push(ctl);
+          keySeries.push(dateKeys[i]);
+        }
+      }
+      return { ctlSeries, keySeries };
+    }
+
+    function formatDateShort(key) {
+      if (!key) return '';
+      const d = parseDateKey(key);
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+
+    function renderFitnessGraph(elId, days) {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      const { ctlSeries, keySeries } = buildCtlSeriesForDays(days);
+      if (!ctlSeries.length) { el.innerHTML = '<p class="meta" style="font-size:10px;text-align:center;padding:20px 0;">No data</p>'; return; }
+      const W = 200, H = 56;
+      const minVal = Math.min(...ctlSeries);
+      const maxVal = Math.max(...ctlSeries, minVal + 1);
+      const range = maxVal - minVal || 1;
+      const pts = ctlSeries.map((v, i) => ({
+        x: ctlSeries.length > 1 ? (i / (ctlSeries.length - 1)) * W : W / 2,
+        y: H - ((v - minVal) / range) * (H - 8) - 4,
+        key: keySeries[i],
+        ctl: Math.round(v),
+      }));
+      const pathD = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+      const fillD = `${pathD} L${W},${H} L0,${H} Z`;
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.setAttribute('width', '100%');
+      svg.setAttribute('height', String(H));
+      svg.style.cssText = 'display:block;width:100%;height:56px;overflow:hidden;';
+      const fillPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      fillPath.setAttribute('d', fillD);
+      fillPath.setAttribute('fill', 'rgba(30,88,209,0.18)');
+      svg.appendChild(fillPath);
+      const linePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      linePath.setAttribute('d', pathD);
+      linePath.setAttribute('fill', 'none');
+      linePath.setAttribute('stroke', '#1e58d1');
+      linePath.setAttribute('stroke-width', '1.8');
+      linePath.setAttribute('vector-effect', 'non-scaling-stroke');
+      svg.appendChild(linePath);
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('r', '4');
+      dot.setAttribute('fill', '#1e58d1');
+      dot.setAttribute('stroke', '#fff');
+      dot.setAttribute('stroke-width', '2');
+      dot.style.display = 'none';
+      svg.appendChild(dot);
+      el.innerHTML = '';
+      el.appendChild(svg);
+      const tooltip = document.createElement('div');
+      tooltip.className = 'fitness-hover-tooltip';
+      el.appendChild(tooltip);
+      svg.style.cursor = 'crosshair';
+      svg.addEventListener('mousemove', (ev) => {
+        const rect = svg.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+        const idx = Math.round(ratio * (pts.length - 1));
+        const p = pts[Math.max(0, Math.min(pts.length - 1, idx))];
+        if (!p) return;
+        dot.setAttribute('cx', String(p.x));
+        dot.setAttribute('cy', String(p.y));
+        dot.style.display = '';
+        const tx = Math.min((p.x / W) * rect.width, rect.width - 110);
+        const ty = Math.max((p.y / H) * rect.height - 48, 0);
+        tooltip.style.left = `${tx}px`;
+        tooltip.style.top = `${ty}px`;
+        tooltip.style.display = 'block';
+        tooltip.innerHTML = `<span style="opacity:.75">${formatDateShort(p.key)}</span><br>Fitness: <strong>${p.ctl}</strong>`;
+      });
+      svg.addEventListener('mouseleave', () => { dot.style.display = 'none'; tooltip.style.display = 'none'; });
+    }
+
+    function renderFitnessGraphs() {
+      renderFitnessGraph('fitnessGraph7', 7);
+      renderFitnessGraph('fitnessGraph20', 20);
+      renderFitnessGraph('fitnessGraph90', 90);
+      renderFitnessGraph('fitnessGraph365', 365);
+    }
+
     function renderPerformanceMetrics() {
       const metrics = buildMetricsToDate(todayKey());
-      document.getElementById('ctlVal').textContent = String(metrics.ctl);
-      document.getElementById('atlVal').textContent = String(metrics.atl);
-      document.getElementById('tsbVal').textContent = metrics.tsb > 0 ? `+${metrics.tsb}` : String(metrics.tsb);
-      document.getElementById('ctlTrend').textContent = String(metrics.ctl);
-      document.getElementById('atlTrend').textContent = String(metrics.atl);
-      document.getElementById('tsbTrend').textContent = metrics.tsb > 0 ? `+${metrics.tsb}` : String(metrics.tsb);
-      renderSparkline('ctlSpark', metrics.ctlSeries);
-      renderSparkline('atlSpark', metrics.atlSeries);
-      renderSparkline('tsbSpark', metrics.tsbSeries);
+      const ctlEl = document.getElementById('ctlVal');
+      const atlEl = document.getElementById('atlVal');
+      const tsbEl = document.getElementById('tsbVal');
+      if (ctlEl) ctlEl.textContent = String(metrics.ctl);
+      if (atlEl) atlEl.textContent = String(metrics.atl);
+      if (tsbEl) tsbEl.textContent = metrics.tsb > 0 ? `+${metrics.tsb}` : String(metrics.tsb);
+      renderFitnessGraphs();
     }
 
     function iconSvg(name) {
@@ -900,6 +1012,7 @@
       document.getElementById('nonWorkoutDescription').style.display = isWorkout ? 'none' : 'block';
 
       document.getElementById('detailModal').classList.add('open');
+      captureDetailInitialState();
     }
 
     function closeDetailModal() {
@@ -3154,8 +3267,8 @@
       const countdownText = daysUntil > 0
         ? `${weeksUntil > 0 ? weeksUntil + ' WEEK' + (weeksUntil !== 1 ? 'S' : '') : daysUntil + ' DAY' + (daysUntil !== 1 ? 'S' : '')} UNTIL EVENT`
         : daysUntil === 0 ? 'TODAY' : 'PAST EVENT';
-      infoEl.innerHTML = `<div class="event-featured-title">${featured.title}</div>
-        <div class="event-countdown">${countdownText}</div>`;
+      infoEl.innerHTML = `<div class="event-countdown">${countdownText}</div>
+        <div class="event-featured-title">${featured.title}</div>`;
 
       featuredEl.appendChild(badgeEl);
       featuredEl.appendChild(infoEl);
@@ -3412,6 +3525,46 @@
       return dateKeyFromDate(d);
     }
 
+    function tomorrowKey() {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      return dateKeyFromDate(d);
+    }
+
+    function renderTomorrowFeed() {
+      const tmrw = tomorrowKey();
+      const feed = document.getElementById('tomorrowFeed');
+      if (!feed) return;
+      feed.innerHTML = '';
+      const plannedTmrw = calendarItems.filter(i => i.kind === 'workout' && i.date === tmrw);
+      if (!plannedTmrw.length) {
+        feed.innerHTML = '<p class="meta" style="padding:10px 0;">No workouts planned.</p>';
+        return;
+      }
+      plannedTmrw.forEach(p => {
+        const sportKey = workoutTypeSportKey(p.workout_type);
+        const iconSrc = ICON_ASSETS[sportKey] || ICON_ASSETS.other;
+        const plannedMin = Number(p.duration_min || 0);
+        const tss = itemToTss(p);
+        const card = document.createElement('div');
+        card.className = 'today-card today-card-planned';
+        card.innerHTML = `
+          <div class="today-card-sport today-card-sport-planned">
+            ${p.workout_type || 'Workout'}
+            <span class="badge planned" style="margin-left:auto;">Planned</span>
+          </div>
+          <div class="today-card-stats">
+            <img class="today-card-icon" src="${iconSrc}" alt="${p.workout_type}" />
+            <span class="today-stat-big">${plannedMin ? plannedMin + ' min' : '--'}</span>
+            <span class="today-stat-big">${fmtDistanceKm(p.distance_km)}</span>
+            <span class="today-stat-big">${tss} <span class="today-stat-unit">TSS</span></span>
+          </div>`;
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', () => openWorkoutModal({ source: 'planned', data: p, planned: p, pair: null }));
+        feed.appendChild(card);
+      });
+    }
+
     function renderTodayFeed() {
       const today = todayKey();
       const yesterday = yesterdayKey();
@@ -3579,6 +3732,7 @@
 
     function renderHome() {
       renderTodayFeed();
+      renderTomorrowFeed();
       renderEvents();
       renderGoals();
       renderPerformanceMetrics();
@@ -4199,6 +4353,7 @@
       document.getElementById('accountSettingsBtn').addEventListener('click', async () => {
         accountMenu.classList.add('hidden');
         document.getElementById('settingsModal').classList.add('open');
+        syncThemeSettingToggle();
         try {
           const res = await fetch('/strava-status');
           const data = await res.json();
@@ -4219,6 +4374,37 @@
         }
       });
     }
+    const homeUserRow = document.getElementById('homeUserRow');
+    if (homeUserRow) {
+      homeUserRow.addEventListener('click', async () => {
+        document.getElementById('settingsModal').classList.add('open');
+        syncThemeSettingToggle();
+        try {
+          const res = await fetch('/strava-status');
+          const data = await res.json();
+          const dot = document.getElementById('stravaStatusDot');
+          const label = document.getElementById('stravaStatusLabel');
+          const btn = document.getElementById('stravaConnectBtn');
+          if (data.connected) {
+            dot.style.background = '#17733e';
+            label.textContent = data.athlete_name ? `Connected as ${data.athlete_name}` : 'Connected';
+            btn.textContent = 'Reconnect';
+          } else {
+            dot.style.background = '#cc4b37';
+            label.textContent = 'Not connected';
+            btn.textContent = 'Connect Strava';
+          }
+        } catch {
+          document.getElementById('stravaStatusLabel').textContent = 'Unable to check status';
+        }
+      });
+    }
+
+    const addTodayBtnEl = document.getElementById('addTodayBtn');
+    if (addTodayBtnEl) {
+      addTodayBtnEl.addEventListener('click', () => openActionModal(todayKey()));
+    }
+
     document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((b) => b.classList.remove('active'));
@@ -4245,7 +4431,36 @@
       if (event.target.id === 'actionModal') closeActionModal();
     });
 
-    document.getElementById('cancelDetail').addEventListener('click', closeDetailModal);
+    // Detail modal close button (X) with unsaved changes check
+    function captureDetailInitialState() {
+      detailInitialState = {
+        title: document.getElementById('dTitle').value,
+        date: document.getElementById('dDate').value,
+        description: document.getElementById('dDescriptionOther').value,
+        wDescription: document.getElementById('dDescription').value,
+      };
+    }
+
+    function hasUnsavedDetailChanges() {
+      if (!detailInitialState) return false;
+      return (
+        document.getElementById('dTitle').value !== detailInitialState.title ||
+        document.getElementById('dDate').value !== detailInitialState.date ||
+        document.getElementById('dDescriptionOther').value !== detailInitialState.description ||
+        document.getElementById('dDescription').value !== detailInitialState.wDescription
+      );
+    }
+
+    async function closeDetailWithUnsavedCheck() {
+      if (!hasUnsavedDetailChanges()) {
+        closeDetailModal();
+        return;
+      }
+      const choice = await confirmUnsavedClose();
+      if (choice === 'discard') closeDetailModal();
+    }
+
+    document.getElementById('closeDetail').addEventListener('click', closeDetailWithUnsavedCheck);
     document.getElementById('deleteDetail').addEventListener('click', deleteCurrentDetail);
     document.getElementById('saveDetail').addEventListener('click', () => saveDetail(false));
     document.getElementById('saveCloseDetail').addEventListener('click', () => saveDetail(true));
@@ -4523,19 +4738,34 @@
     function initDarkMode() {
       const savedTheme = localStorage.getItem('theme') || 'light';
       document.documentElement.setAttribute('data-theme', savedTheme);
+      // Theme toggle is now in Settings panel (themeSettingToggle)
+    }
 
-      const themeToggle = document.getElementById('themeToggle');
-      if (themeToggle) {
-        themeToggle.addEventListener('click', () => {
-          const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
-          const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+    function syncThemeSettingToggle() {
+      const toggle = document.getElementById('themeSettingToggle');
+      if (!toggle) return;
+      const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+      toggle.querySelectorAll('.seg-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.themeVal === currentTheme);
+      });
+    }
+
+    function initThemeSettingToggle() {
+      const toggle = document.getElementById('themeSettingToggle');
+      if (!toggle) return;
+      syncThemeSettingToggle();
+      toggle.querySelectorAll('.seg-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const newTheme = btn.dataset.themeVal;
           document.documentElement.setAttribute('data-theme', newTheme);
           localStorage.setItem('theme', newTheme);
+          syncThemeSettingToggle();
         });
-      }
+      });
     }
 
     initDarkMode();
+    initThemeSettingToggle();
     buildTypeGrids();
     bindWidgetToggles();
     applyWidgetPrefs();
