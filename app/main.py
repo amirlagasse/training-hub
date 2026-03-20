@@ -1631,6 +1631,38 @@ def create_pair(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not planned_id or not strava_id:
         raise HTTPException(status_code=400, detail="planned_id and strava_id are required.")
 
+    planned_items = load_calendar_items()
+    planned_item = next((row for row in planned_items if str(row.get("id")) == planned_id and row.get("kind") == "workout"), None)
+    if not planned_item:
+        raise HTTPException(status_code=404, detail="Planned workout not found.")
+
+    has_planned_content = (
+        float(planned_item.get("duration_min") or 0) > 0
+        or float(planned_item.get("distance_km") or 0) > 0
+        or float(planned_item.get("planned_tss") or 0) > 0
+    )
+    has_completed_on_planned = (
+        float(planned_item.get("completed_duration_min") or 0) > 0
+        or float(planned_item.get("completed_distance_km") or 0) > 0
+        or float(planned_item.get("completed_tss") or 0) > 0
+        or float(planned_item.get("completed_if") or 0) > 0
+    )
+    if not has_planned_content or has_completed_on_planned:
+        raise HTTPException(status_code=400, detail="Pairing requires a planned-only workout.")
+
+    completed_item = next((row for row in ui_activities() if str(row.get("id")) == strava_id), None)
+    if not completed_item:
+        raise HTTPException(status_code=404, detail="Completed workout not found.")
+    completed_has_planned = (
+        float(completed_item.get("duration_min") or 0) > 0
+        or float(completed_item.get("distance_m") or 0) > 0
+        or float(completed_item.get("distance_km") or 0) > 0
+        or float(completed_item.get("planned_tss") or 0) > 0
+        or float(completed_item.get("planned_if") or 0) > 0
+    )
+    if completed_has_planned:
+        raise HTTPException(status_code=400, detail="Pairing requires a completed-only workout.")
+
     pairs = load_pairs()
     pairs = [p for p in pairs if p.get("planned_id") != planned_id and p.get("strava_id") != strava_id]
     new_pair = {
@@ -1644,18 +1676,22 @@ def create_pair(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
     override_date = str(payload.get("override_date", "")).strip()
     override_title = str(payload.get("override_title", "")).strip()
-    if override_date:
-        try:
-            _ = date.fromisoformat(override_date)
-            overrides = load_activity_overrides()
-            current = overrides.get(strava_id, {})
-            if override_title:
-                current["title"] = override_title
-            current["date"] = override_date
-            overrides[strava_id] = current
-            save_activity_overrides(overrides)
-        except ValueError:
-            pass
+    override_type = str(payload.get("override_type", "")).strip()
+    if override_date or override_title or override_type:
+        overrides = load_activity_overrides()
+        current = overrides.get(strava_id, {})
+        if override_title:
+            current["title"] = override_title
+        if override_type:
+            current["type"] = override_type
+        if override_date:
+            try:
+                _ = date.fromisoformat(override_date)
+                current["date"] = override_date
+            except ValueError:
+                pass
+        overrides[strava_id] = current
+        save_activity_overrides(overrides)
 
     return new_pair
 
@@ -1663,10 +1699,24 @@ def create_pair(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 @app.delete("/pairs/{pair_id}")
 def delete_pair(pair_id: str) -> dict[str, bool]:
     pairs = load_pairs()
-    kept = [p for p in pairs if p.get("id") != pair_id]
-    if len(kept) == len(pairs):
+    found = next((p for p in pairs if p.get("id") == pair_id), None)
+    if not found:
         raise HTTPException(status_code=404, detail="Pair not found.")
+    kept = [p for p in pairs if p.get("id") != pair_id]
     save_pairs(kept)
+
+    strava_id = str(found.get("strava_id", "")).strip()
+    planned_id = str(found.get("planned_id", "")).strip()
+    planned_item = next((row for row in load_calendar_items() if str(row.get("id")) == planned_id and row.get("kind") == "workout"), None)
+    inherited_type = str((planned_item or {}).get("workout_type") or "Workout").strip() or "Workout"
+    if strava_id:
+        overrides = load_activity_overrides()
+        current = overrides.get(strava_id, {})
+        current["type"] = inherited_type
+        current["title"] = f"Untitled {inherited_type} Workout"
+        overrides[strava_id] = current
+        save_activity_overrides(overrides)
+
     return {"ok": True}
 
 

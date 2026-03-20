@@ -469,6 +469,37 @@
       return hasPlanned && hasCompleted;
     }
 
+    function hasPlannedOnlyContent(workout) {
+      if (!workout || workout.kind !== 'workout') return false;
+      const hasPlanned = ['duration', 'distance', 'tss'].some((basis) => plannedMetric(workout, basis) > 0);
+      const hasCompleted = !!completedFromPlanned(workout);
+      return hasPlanned && !hasCompleted;
+    }
+
+    function activityHasPlannedContent(activity) {
+      if (!activity) return false;
+      return Number(activity.duration_min || 0) > 0
+        || Number(activity.distance_m || 0) > 0
+        || Number(activity.distance_km || 0) > 0
+        || Number(activity.planned_tss || 0) > 0
+        || Number(activity.planned_if || 0) > 0;
+    }
+
+    function hasCompletedOnlyContent(activity) {
+      if (!activity) return false;
+      return !activityHasPlannedContent(activity);
+    }
+
+    function canPairWorkouts(plannedItem, completedActivity) {
+      if (!plannedItem || !completedActivity) return false;
+      if (plannedItem.kind !== 'workout') return false;
+      if (!hasPlannedOnlyContent(plannedItem)) return false;
+      if (!hasCompletedOnlyContent(completedActivity)) return false;
+      if (pairForPlanned(String(plannedItem.id))) return false;
+      if (pairForStrava(String(completedActivity.id))) return false;
+      return true;
+    }
+
     function plannedMetric(plannedItem, basis) {
       if (basis === 'distance') return Number(plannedItem.distance_km || 0);
       if (basis === 'tss') return itemToTss(plannedItem);
@@ -668,7 +699,14 @@
       const el = document.getElementById(elId);
       if (!el) return;
       const { ctlSeries, keySeries } = buildCtlSeriesForDays(days);
-      if (!ctlSeries.length) { el.innerHTML = '<p class="meta" style="font-size:10px;text-align:center;padding:20px 0;">No data</p>'; return; }
+      const deltaEl = document.getElementById(elId.replace('Graph', 'Delta'));
+      if (!ctlSeries.length) {
+        if (deltaEl) deltaEl.textContent = '0';
+        el.innerHTML = '<p class="meta" style="font-size:10px;text-align:center;padding:20px 0;">No data</p>';
+        return;
+      }
+      const delta = Math.round((ctlSeries[ctlSeries.length - 1] || 0) - (ctlSeries[0] || 0));
+      if (deltaEl) deltaEl.textContent = delta > 0 ? `+${delta}` : String(delta);
       const W = 200, H = 56;
       const minVal = Math.min(...ctlSeries);
       const maxVal = Math.max(...ctlSeries, minVal + 1);
@@ -725,7 +763,7 @@
         tooltip.style.left = `${tx}px`;
         tooltip.style.top = `${ty}px`;
         tooltip.style.display = 'block';
-        tooltip.innerHTML = `<span style="opacity:.75">${formatDateShort(p.key)}</span><br>Fitness: <strong>${p.ctl}</strong>`;
+        tooltip.innerHTML = `<span style="opacity:.75">${formatDateShort(p.key)}</span><br>Fitness (CTL): <strong>${p.ctl}</strong>`;
       });
       svg.addEventListener('mouseleave', () => { dot.style.display = 'none'; tooltip.style.display = 'none'; });
     }
@@ -1167,6 +1205,10 @@
       ev.preventDefault();
       ev.stopPropagation();
       const opts = [];
+      const plannedId = payload.source === 'planned' ? payload.data.id : null;
+      const stravaId = payload.source === 'strava' ? String(payload.data.id) : null;
+      const currentPair = plannedId ? pairForPlanned(plannedId) : stravaId ? pairForStrava(stravaId) : null;
+      const pairedPlanned = currentPair ? calendarItems.find((i) => String(i.id) === String(currentPair.planned_id)) : null;
       if (payload.source === 'planned') {
         opts.push({
           label: 'Edit',
@@ -1208,6 +1250,38 @@
         });
       }
       if (payload.source === 'strava') {
+        if (currentPair) {
+          opts.push({
+            label: 'Edit',
+            onClick: async () => {
+              openWorkoutModal({ source: 'strava', data: payload.data, planned: pairedPlanned || null, pair: currentPair });
+            },
+          });
+          opts.push({
+            label: 'Copy',
+            onClick: async () => {
+              const base = pairedPlanned || null;
+              const copy = base ? { ...base } : {
+                kind: 'workout',
+                date: dateKeyFromDate(new Date(payload.data.start_date_local || new Date())),
+                title: payload.data.name || 'Completed Workout',
+                workout_type: payload.data.type || 'Workout',
+                duration_min: 0,
+                distance_km: 0,
+                intensity: 6,
+              };
+              delete copy.id;
+              delete copy.created_at;
+              copy.title = `${copy.title || 'Workout'} (Copy)`;
+              await fetch('/calendar-items', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(copy),
+              });
+              await loadData();
+            },
+          });
+        }
         opts.push({
           label: 'Delete',
           onClick: () => {
@@ -1219,10 +1293,6 @@
           },
         });
       }
-
-      const plannedId = payload.source === 'planned' ? payload.data.id : null;
-      const stravaId = payload.source === 'strava' ? String(payload.data.id) : null;
-      const currentPair = plannedId ? pairForPlanned(plannedId) : stravaId ? pairForStrava(stravaId) : null;
       if (currentPair) {
         opts.push({
           label: 'Unpair',
@@ -1313,8 +1383,9 @@
       if (!plannedId || !stravaId) return;
       const planned = calendarItems.find(i => String(i.id) === String(plannedId));
       const completed = activities.find(a => String(a.id) === String(stravaId));
-      const typeLabel = (completed && completed.type) ? completed.type : (planned && planned.workout_type) ? planned.workout_type : 'Workout';
-      const untitled = `Untitled ${typeLabel} Workout`;
+      if (!canPairWorkouts(planned, completed)) return;
+      const inheritedType = (planned && planned.workout_type) ? planned.workout_type : ((completed && completed.type) ? completed.type : 'Workout');
+      const plannedTitle = (planned && String(planned.title || '').trim()) || `Untitled ${inheritedType} Workout`;
       await fetch('/pairs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1322,7 +1393,8 @@
           planned_id: plannedId,
           strava_id: String(stravaId),
           override_date: planned ? planned.date : '',
-          override_title: untitled,
+          override_title: plannedTitle,
+          override_type: inheritedType,
         }),
       });
       await loadData();
@@ -1724,6 +1796,13 @@
       }
 
       if (targetPlanned && targetPlanned.id) {
+        const keepPlannedSide = payload.source === 'strava';
+        const plannedCommentsFeed = keepPlannedSide
+          ? commentsArrayFromEntity(targetPlanned)
+          : commentsFeed;
+        const plannedComments = plannedCommentsFeed.length ? plannedCommentsFeed[plannedCommentsFeed.length - 1] : '';
+        const plannedFeel = keepPlannedSide ? Number(targetPlanned.feel || 0) : feel;
+        const plannedRpe = keepPlannedSide ? Number(targetPlanned.rpe || 0) : rpeOut;
         await fetch(`/calendar-items/${targetPlanned.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -1743,10 +1822,10 @@
             planned_calories: plannedCalories,
             planned_work_kj: plannedWorkKj,
             description,
-            comments,
-            comments_feed: commentsFeed,
-            feel,
-            rpe: rpeOut,
+            comments: plannedComments,
+            comments_feed: plannedCommentsFeed,
+            feel: plannedFeel,
+            rpe: plannedRpe,
             completed_duration_min: completedDuration,
             completed_distance_km: completedDistanceM / 1000,
             completed_distance_m: completedDistanceM,
@@ -1765,6 +1844,21 @@
             completed_power_max: completedPowerMax,
           }),
         });
+        if (payload.source === 'strava' && data && data.id) {
+          await fetch(`/activities/${data.id}/meta`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              comments,
+              comments_feed: commentsFeed,
+              feel,
+              rpe: rpeOut,
+              if_value: completedIf,
+              tss_override: completedTss,
+              tss_source: (modalDraft && modalDraft.tssSource) || '',
+            }),
+          });
+        }
       } else if (payload.source === 'planned') {
         const createResp = await fetch('/calendar-items', {
           method: 'POST',
@@ -3525,6 +3619,27 @@
       return dateKeyFromDate(d);
     }
 
+    function homeWorkoutFeedbackMarkup(primary, secondary = null) {
+      const entities = [primary, secondary].filter(Boolean);
+      let emoji = '';
+      let rpe = 0;
+      let comments = 0;
+      entities.forEach((entity) => {
+        if (!entity) return;
+        if (!emoji) emoji = feelEmoji(entity.feel);
+        if (!rpe) {
+          const rv = Number(entity.rpe || 0);
+          if (rv > 0) rpe = rv;
+        }
+        comments = Math.max(comments, commentCount(entity));
+      });
+      const parts = [];
+      const feedbackBits = [emoji, rpe > 0 ? String(rpe) : ''].filter(Boolean).join(' ');
+      if (feedbackBits) parts.push(`<span>${feedbackBits}</span>`);
+      parts.push(`<span>💬${comments > 0 ? ` x${comments}` : ''}</span>`);
+      return `<div class="today-card-foot"><span class="today-card-feedback">${parts.join(' ')}</span></div>`;
+    }
+
     function tomorrowKey() {
       const d = new Date();
       d.setDate(d.getDate() + 1);
@@ -3538,7 +3653,14 @@
       feed.innerHTML = '';
       const plannedTmrw = calendarItems.filter(i => i.kind === 'workout' && i.date === tmrw);
       if (!plannedTmrw.length) {
-        feed.innerHTML = '<p class="meta" style="padding:10px 0;">No workouts planned.</p>';
+        feed.innerHTML = `
+          <div class="tomorrow-empty-state">
+            <p class="meta">You have no scheduled workouts tomorrow.</p>
+            <button id="addTomorrowWorkoutBtn" class="tomorrow-add-btn" type="button">Add a Workout</button>
+          </div>
+        `;
+        const addBtn = document.getElementById('addTomorrowWorkoutBtn');
+        if (addBtn) addBtn.addEventListener('click', () => openActionModal(tmrw, 'workout'));
         return;
       }
       plannedTmrw.forEach(p => {
@@ -3558,7 +3680,8 @@
             <span class="today-stat-big">${plannedMin ? plannedMin + ' min' : '--'}</span>
             <span class="today-stat-big">${fmtDistanceKm(p.distance_km)}</span>
             <span class="today-stat-big">${tss} <span class="today-stat-unit">TSS</span></span>
-          </div>`;
+          </div>
+          ${homeWorkoutFeedbackMarkup(p)}`;
         card.style.cursor = 'pointer';
         card.addEventListener('click', () => openWorkoutModal({ source: 'planned', data: p, planned: p, pair: null }));
         feed.appendChild(card);
@@ -3625,7 +3748,8 @@
             <span class="today-stat-big">${hms(Number(a.moving_time || 0))}${matchedPlanned ? '&#10003;' : ''}</span>
             <span class="today-stat-big">${fmtDistanceMeters(a.distance)}</span>
             <span class="today-stat-big">${tss} <span class="today-stat-unit">TSS</span></span>
-          </div>`;
+          </div>
+          ${homeWorkoutFeedbackMarkup(a, matchedPlanned)}`;
         card.style.cursor = 'pointer';
         card.addEventListener('click', () => openWorkoutModal({ source: 'strava', data: a }));
         card.addEventListener('contextmenu', ev => showItemMenu(ev, { source: 'strava', data: a }));
@@ -3659,7 +3783,8 @@
               <span class="today-stat-big">${hms(completedDur * 60)}&#10003;</span>
               <span class="today-stat-big">${completedDist}</span>
               <span class="today-stat-big">${completedTss} <span class="today-stat-unit">TSS</span></span>
-            </div>`;
+            </div>
+            ${homeWorkoutFeedbackMarkup(p)}`;
         } else {
           const tss = itemToTss(p);
           // Paired with Strava activity — show completed stats with color
@@ -3675,7 +3800,8 @@
                 <span class="today-stat-big">${hms(Number(pairedA.moving_time || 0))}&#10003;</span>
                 <span class="today-stat-big">${fmtDistanceMeters(pairedA.distance)}</span>
                 <span class="today-stat-big">${tssA} <span class="today-stat-unit">TSS</span></span>
-              </div>`;
+              </div>
+              ${homeWorkoutFeedbackMarkup(pairedA, p)}`;
           } else {
             card.className = 'today-card today-card-planned';
             card.innerHTML = `
@@ -3688,7 +3814,8 @@
                 <span class="today-stat-big">${plannedMin ? plannedMin + ' min' : '--'}</span>
                 <span class="today-stat-big">${fmtDistanceKm(p.distance_km)}</span>
                 <span class="today-stat-big">${tss} <span class="today-stat-unit">TSS</span></span>
-              </div>`;
+              </div>
+              ${homeWorkoutFeedbackMarkup(p)}`;
           }
         }
 
@@ -3716,7 +3843,8 @@
             <span class="today-stat-big">${plannedMin ? plannedMin + ' min' : '--'}</span>
             <span class="today-stat-big">${fmtDistanceKm(p.distance_km)}</span>
             <span class="today-stat-big">${tss} <span class="today-stat-unit">TSS</span></span>
-          </div>`;
+          </div>
+          ${homeWorkoutFeedbackMarkup(p)}`;
         card.style.cursor = 'pointer';
         card.addEventListener('click', () => openWorkoutModal({ source: 'planned', data: p, planned: p, pair: null }));
         card.addEventListener('contextmenu', ev => showItemMenu(ev, { source: 'planned', data: p }));
@@ -3811,7 +3939,10 @@
               i.kind === 'workout' && i.date === key && !pairByPlannedId.get(String(i.id))
             );
             if (unpairedPlanned.length === 1) {
-              confirmAndPair(String(unpairedPlanned[0].id), String(dragData.id));
+              const draggedCompleted = activities.find((a) => String(a.id) === String(dragData.id));
+              if (canPairWorkouts(unpairedPlanned[0], draggedCompleted)) {
+                confirmAndPair(String(unpairedPlanned[0].id), String(dragData.id));
+              }
             }
           });
 
@@ -3954,7 +4085,10 @@
               card.addEventListener('dragover', (ev) => ev.preventDefault());
               card.addEventListener('dragenter', (ev) => {
                 ev.preventDefault();
-                if (!completed) card.classList.add('drop-target');
+                const dragData = currentDragData;
+                if (!dragData || dragData.source !== 'strava') return;
+                const draggedCompleted = activities.find((a) => String(a.id) === String(dragData.id));
+                if (canPairWorkouts(item, draggedCompleted)) card.classList.add('drop-target');
               });
               card.addEventListener('dragleave', (ev) => {
                 if (!card.contains(ev.relatedTarget)) card.classList.remove('drop-target');
@@ -3964,7 +4098,12 @@
                 ev.stopPropagation();
                 card.classList.remove('drop-target');
                 const dragData = currentDragData;
-                if (dragData && dragData.source === 'strava') confirmAndPair(String(item.id), String(dragData.id));
+                if (dragData && dragData.source === 'strava') {
+                  const draggedCompleted = activities.find((a) => String(a.id) === String(dragData.id));
+                  if (canPairWorkouts(item, draggedCompleted)) {
+                    confirmAndPair(String(item.id), String(dragData.id));
+                  }
+                }
               });
               card.addEventListener('click', (ev) => {
                 ev.stopPropagation();
@@ -4024,7 +4163,10 @@
             card.addEventListener('dragover', (ev) => ev.preventDefault());
             card.addEventListener('dragenter', (ev) => {
               ev.preventDefault();
-              card.classList.add('drop-target');
+              const dragData = currentDragData;
+              if (!dragData || dragData.source !== 'planned') return;
+              const draggedPlanned = calendarItems.find((i) => String(i.id) === String(dragData.id));
+              if (canPairWorkouts(draggedPlanned, a)) card.classList.add('drop-target');
             });
             card.addEventListener('dragleave', (ev) => {
               if (!card.contains(ev.relatedTarget)) card.classList.remove('drop-target');
@@ -4036,8 +4178,9 @@
               const dragData = currentDragData;
               if (dragData && dragData.source === 'planned') {
                 const draggedPlanned = calendarItems.find((i) => String(i.id) === String(dragData.id));
-                if (compStat === 'unplanned' && hasPlannedAndCompletedContent(draggedPlanned)) return;
-                confirmAndPair(String(dragData.id), String(a.id));
+                if (canPairWorkouts(draggedPlanned, a)) {
+                  confirmAndPair(String(dragData.id), String(a.id));
+                }
               }
             });
             card.addEventListener('click', (ev) => {
@@ -4214,7 +4357,16 @@
     }
 
     document.querySelectorAll('.tab').forEach(btn => {
-      btn.addEventListener('click', () => setView(btn.dataset.view));
+      btn.addEventListener('click', async () => {
+        const view = btn.dataset.view;
+        setView(view);
+        if (view === 'calendar') {
+          await loadData();
+          const today = todayKey();
+          calendarState.anchorDate = today;
+          renderCalendar({ preserveScroll: false, anchorDate: today, jumpToDate: today });
+        }
+      });
     });
 
     document.getElementById('saveSettingsBtn').addEventListener('click', async () => {

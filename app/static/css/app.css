@@ -3615,3 +3615,186 @@
     @media (max-width: 1200px) {
       .home-grid { grid-template-columns: 1fr; }
     }
+
+    /* ── Home layout sizing/dividers (requested 30/40/30) ── */
+    :root:not([data-theme="dark"]) body {
+      background: #fff;
+    }
+    #view-home {
+      background: #fff;
+    }
+    .home-grid {
+      grid-template-columns: 30% 40% 30%;
+      gap: 0;
+    }
+    .home-aside-left {
+      padding-right: 14px;
+      border-right: 1px solid var(--line);
+    }
+    .home-main-col {
+      padding: 0 14px;
+      border-right: 1px solid var(--line);
+    }
+    .home-fitness-col {
+      padding-left: 14px;
+    }
+    .home-fitness-col .home-section-head {
+      margin-bottom: 10px;
+    }
+
+    /* ── Home cards: feedback row in bottom-right ── */
+    .today-card {
+      background: #fff;
+      border: 1px solid #edf2f7;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+    .home-main-col .today-card-sport,
+    .home-main-col .today-card-metrics .today-card-sport {
+      background: #fff;
+    }
+    .today-card-stats {
+      padding-bottom: 6px;
+    }
+    .today-card-foot {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      padding: 0 16px 9px;
+    }
+    .today-card-feedback {
+      font-size: 11px;
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+    }
+
+    /* ── Tomorrow empty state button ── */
+    .tomorrow-empty-state {
+      padding: 12px 2px 8px;
+      display: grid;
+      justify-items: start;
+      gap: 10px;
+    }
+    .tomorrow-add-btn {
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 16px;
+      background: var(--blue);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    /* ── Performance charts: embedded, not boxed ── */
+    .fitness-graphs-grid {
+      gap: 8px 12px;
+    }
+    .fitness-graph-box {
+      border: 0;
+      border-top: 1px solid var(--line);
+      border-radius: 0;
+      padding: 6px 0 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .fitness-graph-delta {
+      text-align: center;
+      color: var(--blue);
+      font-weight: 800;
+      font-size: 22px;
+      line-height: 1;
+      margin-top: 2px;
+    }
+    .fitness-graph-label {
+      text-align: center;
+      margin: 2px 0 8px;
+    }
+    [data-theme="dark"] .fitness-graph-box {
+      border: 0;
+      border-top: 1px solid var(--line);
+      background: transparent;
+      box-shadow: none;
+    }
+
+    /* ── Training zones tighter and centered ── */
+    .zones-col {
+      gap: 10px;
+    }
+    .zones-block {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .zones-title {
+      margin-bottom: 0;
+      text-align: center;
+    }
+    .zones-threshold {
+      margin-bottom: 4px;
+      text-align: center;
+    }
+    .zones-rows {
+      gap: 1px;
+      width: min(230px, 100%);
+      margin: 0 auto;
+    }
+    .zone-row {
+      grid-template-columns: 18px 8px 72px;
+      justify-content: center;
+      padding: 1px 0;
+    }
+    .zone-row-hr {
+      padding: 1px 0;
+    }
+
+    /* ── Dark mode workout state visibility ── */
+    [data-theme="dark"] .work-card {
+      border-top-width: 10px;
+      background: #151c27;
+    }
+    [data-theme="dark"] .work-card.paired-green,
+    [data-theme="dark"] .work-card.done {
+      background: #12301f !important;
+    }
+    [data-theme="dark"] .work-card.paired-yellow {
+      background: #2a2306 !important;
+    }
+    [data-theme="dark"] .work-card.paired-orange {
+      background: #2b1809 !important;
+    }
+    [data-theme="dark"] .work-card.paired-red {
+      background: #2a1116 !important;
+    }
+    [data-theme="dark"] .today-card-green .today-card-stats {
+      background: #3f8f2d;
+    }
+    [data-theme="dark"] .today-card-yellow .today-card-stats {
+      background: #8d7312;
+    }
+    [data-theme="dark"] .today-card-orange .today-card-stats {
+      background: #9b4f16;
+    }
+    [data-theme="dark"] .today-card-red .today-card-stats {
+      background: #8f2c34;
+    }
+    [data-theme="dark"] .today-card-feedback {
+      color: #c0ccd8;
+    }
+
+    @media (max-width: 1200px) {
+      .home-aside-left,
+      .home-main-col {
+        border-right: 0;
+        padding-right: 0;
+        padding-left: 0;
+      }
+      .home-fitness-col {
+        padding-left: 0;
+      }
+    }

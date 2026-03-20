@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260317a" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260319c" />
 </head>
 <body>
   <header class="top-nav">
@@ -83,6 +83,9 @@
           </div>
         </section>
         <aside class="home-fitness-col">
+          <div class="home-section-head">
+            <span class="home-section-title">Performance Metrics</span>
+          </div>
           <div class="fitness-metric-row">
             <div class="fitness-chip chip-atl">
               <span class="num" id="atlVal">0</span>
@@ -99,18 +102,22 @@
           </div>
           <div class="fitness-graphs-grid">
             <div class="fitness-graph-box">
+              <div class="fitness-graph-delta" id="fitnessDelta7">0</div>
               <div class="fitness-graph-label">7 days</div>
               <div class="fitness-graph-canvas" id="fitnessGraph7"></div>
             </div>
             <div class="fitness-graph-box">
+              <div class="fitness-graph-delta" id="fitnessDelta20">0</div>
               <div class="fitness-graph-label">20 days</div>
               <div class="fitness-graph-canvas" id="fitnessGraph20"></div>
             </div>
             <div class="fitness-graph-box">
+              <div class="fitness-graph-delta" id="fitnessDelta90">0</div>
               <div class="fitness-graph-label">90 days</div>
               <div class="fitness-graph-canvas" id="fitnessGraph90"></div>
             </div>
             <div class="fitness-graph-box">
+              <div class="fitness-graph-delta" id="fitnessDelta365">0</div>
               <div class="fitness-graph-label">365 days</div>
               <div class="fitness-graph-canvas" id="fitnessGraph365"></div>
             </div>
@@ -756,6 +763,6 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js?v=20260317a"></script>
+    <script src="/static/js/app.js?v=20260319c"></script>
 </body>
 </html>
