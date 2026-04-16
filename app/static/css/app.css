@@ -630,7 +630,7 @@
     [data-theme="dark"] .wc-kind-metrics { color: #56b4d3; }
     [data-theme="dark"] .wc-kind-note    { color: #c792ea; }
     [data-theme="dark"] .wc-event-countdown { color: #539bf5; }
-    [data-theme="dark"] .wc-event-badge  { background: #1a3a8a; }
+    [data-theme="dark"] .wc-event-badge  { background: var(--blue); }
 
     [data-theme="dark"] .delta-up   { color: #ff8c42; }
     [data-theme="dark"] .delta-down { color: #d4a017; }
@@ -1638,21 +1638,58 @@
 
     /* Event card layout */
     .wc-event-layout {
-      display: flex; align-items: flex-start; gap: 8px; padding-top: 2px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      padding-top: 1px;
     }
     .wc-event-badge {
-      display: flex; flex-direction: column; align-items: center;
-      background: #1f5bd9; color: #fff; border-radius: 5px;
-      padding: 3px 6px; min-width: 34px; flex-shrink: 0;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      width: 27px;
+      height: 32px;
+      background: var(--blue);
+      color: #fff;
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 82%, 0 100%);
+      padding-top: 2px;
+      line-height: 1;
+      flex-shrink: 0;
+      margin-left: 7.5px;
     }
-    .wc-event-month { font-size: 8px; font-weight: 700; letter-spacing: 0.5px; line-height: 1.2; }
-    .wc-event-day   { font-size: 17px; font-weight: 800; line-height: 1.1; }
+    .wc-event-month { font-size: 9px; font-weight: 400; letter-spacing: 0.5px; line-height: 1.05; }
+    .wc-event-day   { font-size: 11px; font-weight: 300; line-height: 1; }
+    .wc-event-trophy {
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 19px;
+      height: 19px;
+      margin-top: 1px;
+    }
+    .wc-event-badge.wc-event-badge-past {
+      justify-content: center;
+      padding-top: 0;
+    }
+    .wc-event-trophy-svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      transform: translateY(0.5px) scale(1.2) scaleY(1.43);
+      transform-origin: center;
+    }
+    .wc-event-trophy-svg path {
+      stroke-width: 1.1;
+    }
     .wc-event-info  { min-width: 0; }
     .wc-event-countdown {
-      font-size: 10px; font-weight: 700; color: #1f5bd9;
-      letter-spacing: 0.3px; text-transform: uppercase; margin: 0 0 2px;
+      font-size: 12px; font-weight: 800; color: #1f5bd9;
+      letter-spacing: 0.2px; text-transform: none; margin: 0 0 1px;
     }
-    .wc-event-name  { font-size: 12px; font-weight: 600; color: var(--text); margin: 0; display: flex; align-items: center; gap: 4px; }
+    .wc-event-name  { font-size: 12px; font-weight: 600; color: var(--text); margin: 0; display: flex; align-items: center; gap: 3px; }
     .wc-priority-badge {
       font-size: 9px; font-weight: 800; border-radius: 3px; padding: 1px 4px; color: #fff;
     }
@@ -3815,6 +3852,8 @@
       justify-items: center;
       margin-top: 10px;
       margin-bottom: 10px;
+      gap: 8px;
+      text-align: center;
     }
 
     .home-add-workout-btn {
@@ -3896,52 +3935,57 @@
     }
 
     #eventsList .event-clean-tag {
-      width: 60px;
-      height: 72px;
+      width: 39px;
+      height: 55px;
       background: var(--blue);
-      clip-path: polygon(0 0, 100% 0, 100% 78%, 50% 100%, 0 78%);
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 82%, 0 100%);
       display: inline-flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-start;
       gap: 0;
       flex-shrink: 0;
       margin-top: 0;
       color: #fff;
       line-height: 1;
-      padding-top: 6px;
+      padding-top: 5px;
     }
 
     #eventsList .event-clean-tag-month {
-      font-size: 18px;
-      font-weight: 700;
-      letter-spacing: 0.9px;
+      font-size: 14px;
+      font-weight: 400;
+      letter-spacing: 0.8px;
     }
 
     #eventsList .event-clean-tag-day {
-      font-size: 24px;
-      font-weight: 800;
+      font-size: 18px;
+      font-weight: 300;
     }
 
     #eventsList .event-clean-body {
       min-width: 0;
-      display: grid;
+      min-height: 48px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
       gap: 2px;
     }
 
     #eventsList .event-clean-title {
-      margin: 0 0 3px;
+      margin: 0;
       color: #000;
       font-size: 14px;
-      font-weight: 400;
+      font-weight: 300;
+      line-height: 1.2;
     }
 
     #eventsList .event-clean-countdown {
       margin: 0;
       color: var(--blue);
       font-size: 12px;
-      font-weight: 400;
+      font-weight: 700;
       text-transform: uppercase;
+      line-height: 1.2;
     }
 
     #eventsList .event-clean-inline {
@@ -3964,6 +4008,15 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    #eventsList .event-graph-meta {
+      margin: 6px 0 0;
+      font-size: 10px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
     #eventsList .event-ctl-chart-wrap {

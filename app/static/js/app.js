@@ -3377,8 +3377,8 @@
               <span class="event-clean-tag-day">${dy}</span>
             </span>
             <span class="event-clean-body">
+              <p class="event-clean-title">${e.title || 'Event'}</p>
               <p class="event-clean-countdown">${countdownText}</p>
-              <p class="event-clean-inline"><span class="event-clean-inline-date">${mo} ${dy}</span><span class="event-clean-inline-name">${e.title || 'Event'}</span></p>
             </span>
           </div>
         `;
@@ -3391,6 +3391,14 @@
       chartDiv.className = 'event-ctl-chart-wrap';
       renderEventCtlChart(chartDiv, featured);
       list.appendChild(chartDiv);
+
+      const featuredDate = parseDateKey(featured.date);
+      const featuredMo = months[featuredDate.getMonth()];
+      const featuredDy = String(featuredDate.getDate());
+      const graphMeta = document.createElement('p');
+      graphMeta.className = 'event-graph-meta';
+      graphMeta.innerHTML = `<span class="event-clean-inline-date">${featuredMo} ${featuredDy}</span><span class="event-clean-inline-name">${featured.title || 'Event'}</span>`;
+      list.appendChild(graphMeta);
     }
 
     function renderGoals() {
@@ -3553,6 +3561,7 @@
     }
 
     function buildHrZones(lthr) {
+      const threshold = Number(lthr || 0);
       const zones = [
         { label: 'T5', lo: 1.00, hi: null, color: '#7d0a14' },
         { label: 'T4', lo: 0.94, hi: 0.99, color: '#a51725' },
@@ -3564,11 +3573,11 @@
       el.className = 'zones-block zones-block-hr';
       el.innerHTML = `
         <div class="zones-title zones-title-hr">Heart Rate</div>
-        <div class="zones-threshold">Threshold: ${lthr} BPM</div>
+        <div class="zones-threshold">Threshold: ${threshold > 0 ? `${threshold} BPM` : '-- BPM'}</div>
         <div class="zones-rows">
           ${zones.map(z => {
-            const lo = z.lo === 0 ? 0 : Math.round(z.lo * lthr);
-            const hi = z.hi ? Math.round(z.hi * lthr) : 255;
+            const lo = threshold > 0 ? (z.lo === 0 ? 0 : Math.round(z.lo * threshold)) : '--';
+            const hi = threshold > 0 ? (z.hi ? Math.round(z.hi * threshold) : 255) : '--';
             return `<div class="zone-row zone-row-hr">
               <span class="zone-num">${z.label}</span>
               <span class="zone-bar-pip" style="background:${z.color}"></span>
@@ -3608,7 +3617,7 @@
       if (ftpVal > 0) powerCol.appendChild(buildPowerZones(ftpVal, 'Bike'));
 
       const lthrVal = Number(lthr.global || lthr.run || lthr.ride || lthr.row || 0);
-      if (lthrVal > 0) hrCol.appendChild(buildHrZones(lthrVal));
+      hrCol.appendChild(buildHrZones(lthrVal));
 
       const row = document.createElement('div');
       row.className = 'zones-grid';
@@ -3667,6 +3676,7 @@
       if (!plannedTmrw.length) {
         feed.innerHTML = `
           <div class="tomorrow-empty-state">
+            <p class="meta">You have no scheduled workouts tomorrow.</p>
             <button id="addTomorrowWorkoutBtn" class="home-add-workout-btn" type="button">Add a Workout</button>
           </div>
         `;
@@ -3864,9 +3874,12 @@
         feed.appendChild(card);
       });
 
-      if (!metricsItems.length && !doneToday.length && !plannedToday.length && !missedYesterday.length) {
+      if (!doneToday.length && !plannedToday.length && !missedYesterday.length) {
         if (todayActions) {
-          todayActions.innerHTML = '<button id="addTodayWorkoutBtn" class="home-add-workout-btn" type="button">Add a Workout</button>';
+          todayActions.innerHTML = `
+            <p class="meta">Nothing logged for today.</p>
+            <button id="addTodayWorkoutBtn" class="home-add-workout-btn" type="button">Add a Workout</button>
+          `;
           const addBtn = document.getElementById('addTodayWorkoutBtn');
           if (addBtn) addBtn.addEventListener('click', () => openActionModal(today, 'workout'));
         }
@@ -4021,13 +4034,22 @@
                 const daysUntil = Math.round((d - new Date(todayKey() + 'T00:00:00')) / 86400000);
                 const countdown = daysUntil > 0 ? `${daysUntil} DAY${daysUntil !== 1 ? 'S' : ''} UNTIL EVENT`
                   : daysUntil === 0 ? 'EVENT TODAY'
-                  : `${Math.abs(daysUntil)} DAY${Math.abs(daysUntil) !== 1 ? 'S' : ''} AGO`;
+                  : 'How did it go?';
+                const badgeInner = daysUntil < 0
+                  ? `<span class="wc-event-trophy" aria-hidden="true">
+                      <svg class="wc-event-trophy-svg" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                        <path d="M7 4h10v3a5 5 0 0 1-4 4.9V14h3v2H8v-2h3v-2.1A5 5 0 0 1 7 7V4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                        <path d="M7 6H4a3 3 0 0 0 3 3M17 6h3a3 3 0 0 1-3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                      </svg>
+                    </span>`
+                  : `<span class="wc-event-month">${month}</span><span class="wc-event-day">${day}</span>`;
+                const badgeClass = daysUntil < 0 ? 'wc-event-badge wc-event-badge-past' : 'wc-event-badge';
                 const priorityBadge = item.priority && item.priority !== 'C'
                   ? `<span class="wc-priority-badge wc-priority-${item.priority}">${item.priority}</span>` : '';
                 card.innerHTML = `
                   <button class="card-menu-btn" type="button">&#8942;</button>
                   <div class="wc-event-layout">
-                    <div class="wc-event-badge"><span class="wc-event-month">${month}</span><span class="wc-event-day">${day}</span></div>
+                    <div class="${badgeClass}">${badgeInner}</div>
                     <div class="wc-event-info">
                       <p class="wc-event-countdown">${countdown}</p>
                       <p class="wc-event-name">${item.title || 'Event'}${priorityBadge}</p>
