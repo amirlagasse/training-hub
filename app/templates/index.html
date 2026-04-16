@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260319c" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260415k" />
 </head>
 <body>
   <header class="top-nav">
@@ -56,30 +56,32 @@
           <div class="home-section">
             <div class="home-section-head">
               <span class="home-section-title">Goals</span>
-              <button class="goal-btn" id="addGoalBtn">Add Goal</button>
+              <button class="plus-btn" id="addGoalBtn">+</button>
             </div>
             <div id="goalsList"></div>
           </div>
         </aside>
         <section class="home-main-col">
           <div class="home-section">
-            <div class="home-section-head">
-              <span class="home-section-title">Today</span>
+            <div class="home-section-head home-day-head">
+              <span class="home-section-title home-day-title">Today</span>
               <button class="plus-btn" id="addTodayBtn">+</button>
             </div>
             <div id="todayFeed"></div>
+            <div id="todayActions"></div>
+            <div class="home-section" id="trainingZonesPanel" style="display:none;">
+              <div class="home-section-head home-zones-head">
+                <span class="home-section-title home-zones-title">Today's Training Zones</span>
+              </div>
+              <div id="trainingZonesGrid"></div>
+            </div>
           </div>
           <div class="home-section">
-            <div class="home-section-head">
-              <span class="home-section-title">Tomorrow</span>
+            <div class="home-section-head home-day-head">
+              <span class="home-section-title home-day-title">Tomorrow</span>
+              <button class="plus-btn" id="addTomorrowBtn">+</button>
             </div>
             <div id="tomorrowFeed"></div>
-          </div>
-          <div class="home-section" id="trainingZonesPanel" style="display:none;">
-            <div class="home-section-head" style="justify-content:center;">
-              <span class="home-section-title">Today's Training Zones</span>
-            </div>
-            <div id="trainingZonesGrid"></div>
           </div>
         </section>
         <aside class="home-fitness-col">
@@ -100,25 +102,26 @@
               <span class="lbl">Form</span>
             </div>
           </div>
+          <div class="fitness-ramp-rates-label">Fitness Ramp Rates</div>
           <div class="fitness-graphs-grid">
             <div class="fitness-graph-box">
               <div class="fitness-graph-delta" id="fitnessDelta7">0</div>
-              <div class="fitness-graph-label">7 days</div>
+              <div class="fitness-graph-label">Last 7</div>
               <div class="fitness-graph-canvas" id="fitnessGraph7"></div>
             </div>
             <div class="fitness-graph-box">
               <div class="fitness-graph-delta" id="fitnessDelta20">0</div>
-              <div class="fitness-graph-label">20 days</div>
+              <div class="fitness-graph-label">Last 20</div>
               <div class="fitness-graph-canvas" id="fitnessGraph20"></div>
             </div>
             <div class="fitness-graph-box">
               <div class="fitness-graph-delta" id="fitnessDelta90">0</div>
-              <div class="fitness-graph-label">90 days</div>
+              <div class="fitness-graph-label">Last 90</div>
               <div class="fitness-graph-canvas" id="fitnessGraph90"></div>
             </div>
             <div class="fitness-graph-box">
               <div class="fitness-graph-delta" id="fitnessDelta365">0</div>
-              <div class="fitness-graph-label">365 days</div>
+              <div class="fitness-graph-label">Last 365</div>
               <div class="fitness-graph-canvas" id="fitnessGraph365"></div>
             </div>
           </div>
@@ -763,6 +766,6 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js?v=20260319c"></script>
+    <script src="/static/js/app.js?v=20260415k"></script>
 </body>
 </html>

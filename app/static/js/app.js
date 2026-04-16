@@ -706,7 +706,7 @@
         return;
       }
       const delta = Math.round((ctlSeries[ctlSeries.length - 1] || 0) - (ctlSeries[0] || 0));
-      if (deltaEl) deltaEl.textContent = delta > 0 ? `+${delta}` : String(delta);
+      if (deltaEl) deltaEl.textContent = String(delta);
       const W = 200, H = 56;
       const minVal = Math.min(...ctlSeries);
       const maxVal = Math.max(...ctlSeries, minVal + 1);
@@ -719,6 +719,7 @@
       }));
       const pathD = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
       const fillD = `${pathD} L${W},${H} L0,${H} Z`;
+      const solidGraphBlue = '#7a9bcf';
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
       svg.setAttribute('preserveAspectRatio', 'none');
@@ -727,20 +728,12 @@
       svg.style.cssText = 'display:block;width:100%;height:56px;overflow:hidden;';
       const fillPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       fillPath.setAttribute('d', fillD);
-      fillPath.setAttribute('fill', 'rgba(30,88,209,0.18)');
+      fillPath.setAttribute('fill', solidGraphBlue);
       svg.appendChild(fillPath);
-      const linePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      linePath.setAttribute('d', pathD);
-      linePath.setAttribute('fill', 'none');
-      linePath.setAttribute('stroke', '#1e58d1');
-      linePath.setAttribute('stroke-width', '1.8');
-      linePath.setAttribute('vector-effect', 'non-scaling-stroke');
-      svg.appendChild(linePath);
       const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
       dot.setAttribute('r', '4');
-      dot.setAttribute('fill', '#1e58d1');
-      dot.setAttribute('stroke', '#fff');
-      dot.setAttribute('stroke-width', '2');
+      dot.setAttribute('fill', solidGraphBlue);
+      dot.setAttribute('stroke', 'none');
       dot.style.display = 'none';
       svg.appendChild(dot);
       el.innerHTML = '';
@@ -3300,6 +3293,19 @@
       const eventX = xOf(totalPoints - 1), eventY = yOf(eventCtl);
       const eventCtlRounded = Math.round(eventCtl);
       const todayCtlRounded = Math.round(todayCtl);
+      let todayLabelX = todayX + 8;
+      let todayLabelY = todayY + 14;
+      let eventLabelX = eventX - 8;
+      let eventLabelY = eventY + 14;
+      if (Math.abs(todayLabelX - eventLabelX) < 120 && Math.abs(todayLabelY - eventLabelY) < 24) {
+        todayLabelY += 6;
+        eventLabelY += 18;
+        eventLabelX -= 14;
+      }
+      todayLabelY = Math.min(H - 26, Math.max(12, todayLabelY));
+      eventLabelY = Math.min(H - 30, Math.max(12, eventLabelY));
+      todayLabelX = Math.min(W - 95, Math.max(6, todayLabelX));
+      eventLabelX = Math.min(W - 10, Math.max(95, eventLabelX));
 
       container.innerHTML = `
         <svg class="event-ctl-chart" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" aria-label="CTL trend to event">
@@ -3312,81 +3318,79 @@
           <polyline points="${histPts}" fill="none" stroke="#4a7fc1" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
           <polyline points="${projPts}" fill="none" stroke="#6a9fd8" stroke-width="1.8" stroke-dasharray="5,4" stroke-linejoin="round" stroke-linecap="round"/>
           <circle cx="${todayX.toFixed(1)}" cy="${todayY.toFixed(1)}" r="5" fill="#4a7fc1" stroke="#fff" stroke-width="1.5"/>
-          <text x="${(todayX + 8).toFixed(1)}" y="${(todayY - 6).toFixed(1)}" class="ectl-label" font-weight="700">Today ${todayCtlRounded} CTL</text>
+          <text x="${todayLabelX.toFixed(1)}" y="${todayLabelY.toFixed(1)}" class="ectl-label">
+            <tspan font-weight="700">Today</tspan><tspan> ${todayCtlRounded} CTL</tspan>
+          </text>
           <circle cx="${eventX.toFixed(1)}" cy="${eventY.toFixed(1)}" r="5" fill="#7a9fc0" stroke="#fff" stroke-width="1.5"/>
-          <text x="${(eventX - 4).toFixed(1)}" y="${(eventY - 10).toFixed(1)}" class="ectl-label" text-anchor="end">Event ${eventCtlRounded} CTL</text>
-          <text x="${(eventX - 4).toFixed(1)}" y="${(eventY - 22).toFixed(1)}" class="ectl-label" text-anchor="end">${event.title}</text>
+          <text x="${eventLabelX.toFixed(1)}" y="${eventLabelY.toFixed(1)}" class="ectl-label" text-anchor="end">
+            <tspan font-weight="700">Event</tspan><tspan> ${eventCtlRounded} CTL</tspan>
+          </text>
+          <text x="${eventLabelX.toFixed(1)}" y="${(eventLabelY + 11).toFixed(1)}" class="ectl-label" text-anchor="end">${event.title}</text>
         </svg>`;
+    }
+
+    function numberWord(v) {
+      const words = {
+        0: 'Zero', 1: 'One', 2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five', 6: 'Six',
+        7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten', 11: 'Eleven', 12: 'Twelve',
+      };
+      return words[v] || String(v);
+    }
+
+    function eventCountdownLabel(daysUntil) {
+      if (daysUntil <= 0) return 'Today';
+      if (daysUntil < 7) return `${numberWord(daysUntil)} Day${daysUntil === 1 ? '' : 's'} Until Event`;
+      if (daysUntil < 14) return 'One Week Until Event';
+      const weeksUntil = Math.round(daysUntil / 7);
+      return `${numberWord(weeksUntil)} Week${weeksUntil === 1 ? '' : 's'} Until Event`;
     }
 
     function renderEvents() {
       const list = document.getElementById('eventsList');
       const today = todayKey();
-      const allEvents = calendarItems
+      const upcoming = calendarItems
         .filter(i => i.kind === 'event')
+        .filter(e => e.date >= today)
         .sort((a, b) => (a.date > b.date ? 1 : -1));
 
       list.innerHTML = '';
-      if (!allEvents.length) {
-        list.innerHTML = '<p class="meta">No events yet. Click + to add one.</p>';
+      if (!upcoming.length) {
+        list.innerHTML = '<p class="meta">No upcoming events.</p>';
         return;
       }
 
-      const priorityOrder = { A: 0, B: 1, C: 2 };
-      const upcoming = allEvents.filter(e => e.date >= today);
-      upcoming.sort((a, b) => {
-        const pa = priorityOrder[a.priority] ?? 2;
-        const pb = priorityOrder[b.priority] ?? 2;
-        if (pa !== pb) return pa - pb;
-        return a.date > b.date ? 1 : -1;
-      });
-      const featured = upcoming[0] || allEvents[allEvents.length - 1];
-      const eventDate = parseDateKey(featured.date);
-      const todayDate = parseDateKey(today);
-      const daysUntil = Math.round((eventDate - todayDate) / 86400000);
-      const weeksUntil = Math.round(daysUntil / 7);
+      const featured = upcoming[0];
       const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-      const mon = months[eventDate.getMonth()];
-      const day = eventDate.getDate();
-
-      const featuredEl = document.createElement('div');
-      featuredEl.className = 'event-featured';
-
-      const badgeEl = document.createElement('div');
-      badgeEl.className = 'event-date-badge';
-      badgeEl.innerHTML = `<span class="edb-month">${mon}</span><span class="edb-day">${day}</span>`;
-
-      const infoEl = document.createElement('div');
-      infoEl.className = 'event-featured-info';
-      const countdownText = daysUntil > 0
-        ? `${weeksUntil > 0 ? weeksUntil + ' WEEK' + (weeksUntil !== 1 ? 'S' : '') : daysUntil + ' DAY' + (daysUntil !== 1 ? 'S' : '')} UNTIL EVENT`
-        : daysUntil === 0 ? 'TODAY' : 'PAST EVENT';
-      infoEl.innerHTML = `<div class="event-countdown">${countdownText}</div>
-        <div class="event-featured-title">${featured.title}</div>`;
-
-      featuredEl.appendChild(badgeEl);
-      featuredEl.appendChild(infoEl);
-      list.appendChild(featuredEl);
+      const todayDate = parseDateKey(today);
+      upcoming.forEach((e) => {
+        const eDate = parseDateKey(e.date);
+        const daysUntil = Math.round((eDate - todayDate) / 86400000);
+        const countdownText = eventCountdownLabel(daysUntil);
+        const mo = months[eDate.getMonth()];
+        const dy = String(eDate.getDate());
+        const item = document.createElement('div');
+        item.className = 'event-item-clean';
+        item.innerHTML = `
+          <div class="event-clean-row">
+            <span class="event-clean-tag" aria-hidden="true">
+              <span class="event-clean-tag-month">${mo}</span>
+              <span class="event-clean-tag-day">${dy}</span>
+            </span>
+            <span class="event-clean-body">
+              <p class="event-clean-countdown">${countdownText}</p>
+              <p class="event-clean-inline"><span class="event-clean-inline-date">${mo} ${dy}</span><span class="event-clean-inline-name">${e.title || 'Event'}</span></p>
+            </span>
+          </div>
+        `;
+        item.style.cursor = 'pointer';
+        item.addEventListener('click', () => openDetailModal(e));
+        list.appendChild(item);
+      });
 
       const chartDiv = document.createElement('div');
       chartDiv.className = 'event-ctl-chart-wrap';
       renderEventCtlChart(chartDiv, featured);
       list.appendChild(chartDiv);
-
-      const tableDiv = document.createElement('div');
-      tableDiv.className = 'events-table';
-      allEvents.forEach((e, idx) => {
-        const eDate = parseDateKey(e.date);
-        const mo = months[eDate.getMonth()];
-        const dy = String(eDate.getDate()).padStart(2, '0');
-        const row = document.createElement('div');
-        row.className = 'events-row' + (idx % 2 === 1 ? ' events-row-alt' : '');
-        row.innerHTML = `<span class="events-row-date">${mo} ${dy}</span><span class="events-row-title">${e.title}</span>`;
-        row.style.cursor = 'pointer';
-        row.addEventListener('click', () => openDetailModal(e));
-        tableDiv.appendChild(row);
-      });
-      list.appendChild(tableDiv);
     }
 
     function renderGoals() {
@@ -3401,7 +3405,17 @@
 
       list.innerHTML = '';
       if (!goals.length) {
-        list.innerHTML = '<p class="meta">No goals yet. Click Add Goal.</p>';
+        list.innerHTML = `
+          <div class="goals-empty-state">
+            <p class="goals-empty-title">Stay on track by adding your goals</p>
+            <p class="goals-empty-copy">Examples:</p>
+            <p class="goals-empty-copy">Do two core sessions</p>
+            <p class="goals-empty-copy">Get eight hours of sleep</p>
+            <button class="goal-btn goal-btn-outline" id="addGoalEmptyBtn" type="button">Add Goal</button>
+          </div>
+        `;
+        const emptyAdd = document.getElementById('addGoalEmptyBtn');
+        if (emptyAdd) emptyAdd.addEventListener('click', () => openActionModal(todayKey(), 'goal'));
         return;
       }
 
@@ -3497,7 +3511,7 @@
     }
 
     function sportKeyToLabel(key) {
-      return { ride: 'Cycling', run: 'Running', swim: 'Swimming', row: 'Rowing', strength: 'Strength', other: 'Other' }[key] || key;
+      return { ride: 'Bike', run: 'Running', swim: 'Swimming', row: 'Rowing', strength: 'Strength', other: 'Other' }[key] || key;
     }
 
     function workoutTypeSportKey(type) {
@@ -3522,7 +3536,7 @@
       const el = document.createElement('div');
       el.className = 'zones-block';
       el.innerHTML = `
-        <div class="zones-title zones-title-power">Power: ${sportLabel}</div>
+        <div class="zones-title zones-title-power">Power ${sportLabel}</div>
         <div class="zones-threshold">Threshold: ${ftp} W</div>
         <div class="zones-rows">
           ${zones.map(z => {
@@ -3540,25 +3554,23 @@
 
     function buildHrZones(lthr) {
       const zones = [
-        { name: 'Zone 5C: Anaerobic Capacity', lo: 1.06, hi: null,  color: '#3d1a6e' },
-        { name: 'Zone 5B: Aerobic Capacity',   lo: 1.03, hi: 1.06,  color: '#6b2090' },
-        { name: 'Zone 5A: SuperThreshold',     lo: 1.00, hi: 1.02,  color: '#8b40a0' },
-        { name: 'Zone 4: SubThreshold',        lo: 0.94, hi: 0.99,  color: '#1e4fc2' },
-        { name: 'Zone 3: Tempo',               lo: 0.89, hi: 0.93,  color: '#1a7fc4' },
-        { name: 'Zone 2: Aerobic',             lo: 0.81, hi: 0.88,  color: '#1a9ec4' },
-        { name: 'Zone 1: Recovery',            lo: 0,    hi: 0.80,  color: '#b8d8eb' },
+        { label: 'T5', lo: 1.00, hi: null, color: '#7d0a14' },
+        { label: 'T4', lo: 0.94, hi: 0.99, color: '#a51725' },
+        { label: 'T3', lo: 0.88, hi: 0.93, color: '#c43a49' },
+        { label: 'T2', lo: 0.82, hi: 0.87, color: '#dd6975' },
+        { label: 'T1', lo: 0,    hi: 0.81, color: '#f2c9cf' },
       ];
       const el = document.createElement('div');
       el.className = 'zones-block zones-block-hr';
       el.innerHTML = `
         <div class="zones-title zones-title-hr">Heart Rate</div>
-        <div class="zones-threshold">Threshold: ${lthr} bpm</div>
+        <div class="zones-threshold">Threshold: ${lthr} BPM</div>
         <div class="zones-rows">
           ${zones.map(z => {
             const lo = z.lo === 0 ? 0 : Math.round(z.lo * lthr);
             const hi = z.hi ? Math.round(z.hi * lthr) : 255;
             return `<div class="zone-row zone-row-hr">
-              <span class="zone-name">${z.name}</span>
+              <span class="zone-num">${z.label}</span>
               <span class="zone-bar-pip" style="background:${z.color}"></span>
               <span class="zone-range">${lo}-${hi}</span>
             </div>`;
@@ -3590,10 +3602,10 @@
       const hrCol = document.createElement('div');
       hrCol.className = 'zones-col';
 
-      sportKeys.forEach(key => {
-        const ftpVal = Number(ftp[key] || 0);
-        if (ftpVal > 0) powerCol.appendChild(buildPowerZones(ftpVal, sportKeyToLabel(key)));
-      });
+      const bikeFtp = Number(ftp.ride || 0);
+      const fallbackFtp = Object.values(ftp).map(v => Number(v || 0)).find(v => v > 0) || 0;
+      const ftpVal = bikeFtp > 0 ? bikeFtp : fallbackFtp;
+      if (ftpVal > 0) powerCol.appendChild(buildPowerZones(ftpVal, 'Bike'));
 
       const lthrVal = Number(lthr.global || lthr.run || lthr.ride || lthr.row || 0);
       if (lthrVal > 0) hrCol.appendChild(buildHrZones(lthrVal));
@@ -3655,8 +3667,7 @@
       if (!plannedTmrw.length) {
         feed.innerHTML = `
           <div class="tomorrow-empty-state">
-            <p class="meta">You have no scheduled workouts tomorrow.</p>
-            <button id="addTomorrowWorkoutBtn" class="tomorrow-add-btn" type="button">Add a Workout</button>
+            <button id="addTomorrowWorkoutBtn" class="home-add-workout-btn" type="button">Add a Workout</button>
           </div>
         `;
         const addBtn = document.getElementById('addTomorrowWorkoutBtn');
@@ -3692,7 +3703,9 @@
       const today = todayKey();
       const yesterday = yesterdayKey();
       const feed = document.getElementById('todayFeed');
+      const todayActions = document.getElementById('todayActions');
       feed.innerHTML = '';
+      if (todayActions) todayActions.innerHTML = '';
 
       const metricsItems = calendarItems.filter(i => i.kind === 'metrics' && i.date === today);
       const doneToday = activities.filter(a => dateKeyFromDate(new Date(a.start_date_local)) === today);
@@ -3852,7 +3865,11 @@
       });
 
       if (!metricsItems.length && !doneToday.length && !plannedToday.length && !missedYesterday.length) {
-        feed.innerHTML = '<p class="meta" style="padding:16px 18px;">Nothing logged for today yet.</p>';
+        if (todayActions) {
+          todayActions.innerHTML = '<button id="addTodayWorkoutBtn" class="home-add-workout-btn" type="button">Add a Workout</button>';
+          const addBtn = document.getElementById('addTodayWorkoutBtn');
+          if (addBtn) addBtn.addEventListener('click', () => openActionModal(today, 'workout'));
+        }
       }
 
       renderTrainingZones(doneToday, plannedToday);
@@ -4555,6 +4572,10 @@
     const addTodayBtnEl = document.getElementById('addTodayBtn');
     if (addTodayBtnEl) {
       addTodayBtnEl.addEventListener('click', () => openActionModal(todayKey()));
+    }
+    const addTomorrowBtnEl = document.getElementById('addTomorrowBtn');
+    if (addTomorrowBtnEl) {
+      addTomorrowBtnEl.addEventListener('click', () => openActionModal(tomorrowKey()));
     }
 
     document.querySelectorAll('#unitSystemToggle .seg-btn').forEach((btn) => {

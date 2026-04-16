@@ -3707,7 +3707,7 @@
       text-align: center;
       color: var(--blue);
       font-weight: 800;
-      font-size: 22px;
+      font-size: 15px;
       line-height: 1;
       margin-top: 2px;
     }
@@ -3797,4 +3797,231 @@
       .home-fitness-col {
         padding-left: 0;
       }
+    }
+
+    /* ── Home tab fixes ── */
+    .home-day-head {
+      justify-content: space-between;
+      gap: 0;
+      margin-bottom: 0;
+    }
+
+    .home-day-title {
+      text-align: left;
+    }
+
+    #todayActions {
+      display: grid;
+      justify-items: center;
+      margin-top: 10px;
+      margin-bottom: 10px;
+    }
+
+    .home-add-workout-btn {
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 16px;
+      background: var(--blue);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .tomorrow-empty-state {
+      padding: 10px 2px 8px;
+      display: grid;
+      justify-items: center;
+      gap: 8px;
+    }
+
+    #trainingZonesPanel {
+      border: 0;
+      margin: 0;
+      padding: 0;
+    }
+
+    #trainingZonesPanel .home-zones-head {
+      border: 0;
+      margin: 0 0 6px;
+      padding: 0;
+      justify-content: center;
+    }
+
+    #trainingZonesPanel .home-zones-title,
+    .fitness-ramp-rates-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .fitness-ramp-rates-label {
+      margin: 2px 0 10px;
+    }
+
+    #trainingZonesPanel .zones-title {
+      font-size: 10px;
+    }
+
+    #trainingZonesPanel .zones-threshold {
+      font-size: 9px;
+    }
+
+    #trainingZonesPanel .zone-row {
+      font-size: 9px;
+    }
+
+    #trainingZonesPanel .zone-row-hr {
+      font-size: 8px;
+    }
+
+    .fitness-graph-box,
+    [data-theme="dark"] .fitness-graph-box {
+      border-top: 0;
+    }
+
+    #eventsList .event-item-clean {
+      padding: 6px 0;
+      margin: 0;
+    }
+
+    #eventsList .event-clean-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    #eventsList .event-clean-tag {
+      width: 60px;
+      height: 72px;
+      background: var(--blue);
+      clip-path: polygon(0 0, 100% 0, 100% 78%, 50% 100%, 0 78%);
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      flex-shrink: 0;
+      margin-top: 0;
+      color: #fff;
+      line-height: 1;
+      padding-top: 6px;
+    }
+
+    #eventsList .event-clean-tag-month {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.9px;
+    }
+
+    #eventsList .event-clean-tag-day {
+      font-size: 24px;
+      font-weight: 800;
+    }
+
+    #eventsList .event-clean-body {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+
+    #eventsList .event-clean-title {
+      margin: 0 0 3px;
+      color: #000;
+      font-size: 14px;
+      font-weight: 400;
+    }
+
+    #eventsList .event-clean-countdown {
+      margin: 0;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 400;
+      text-transform: uppercase;
+    }
+
+    #eventsList .event-clean-inline {
+      margin: 0;
+      font-size: 10px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    #eventsList .event-clean-inline-date {
+      font-weight: 400;
+      color: var(--text);
+    }
+
+    #eventsList .event-clean-inline-name {
+      color: var(--muted);
+      font-weight: 400;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #eventsList .event-ctl-chart-wrap {
+      margin: 8px 0 0;
+      border-top: 0;
+    }
+
+    #eventsList .ectl-label {
+      font-size: 10px;
+    }
+
+    .events-table {
+      border-top: 0;
+      margin-top: 0;
+    }
+
+    .goals-empty-state {
+      display: grid;
+      justify-items: center;
+      text-align: center;
+      gap: 4px;
+      padding: 8px 6px;
+    }
+
+    .goals-empty-title {
+      margin: 0 0 4px;
+      font-weight: 700;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .goals-empty-copy {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 400;
+    }
+
+    .goal-btn,
+    .goal-btn-outline {
+      background: #fff;
+      border: 1px solid #d2d9e3;
+      color: var(--blue);
+      border-radius: 999px;
+      padding: 7px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .goals-empty-state .goal-btn-outline {
+      margin-top: 8px;
+    }
+
+    #trainingZonesPanel .zones-title-power {
+      color: #1f5bd7;
+    }
+
+    #trainingZonesPanel .zones-title-hr {
+      color: #a51725;
     }
