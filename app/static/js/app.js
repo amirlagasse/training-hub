@@ -104,6 +104,7 @@
     let fitUploadContext = 'global';
     let modalDraft = null;
     let detailInitialState = null;
+    let detailSaving = false;
     let workoutModalSession = 0;
     const calendarState = {
       anchorDate: todayKey(),
@@ -495,6 +496,7 @@
       if (plannedItem.kind !== 'workout') return false;
       if (!hasPlannedOnlyContent(plannedItem)) return false;
       if (!hasCompletedOnlyContent(completedActivity)) return false;
+      if (workoutTypeSportKey(plannedItem.workout_type) !== workoutTypeSportKey(completedActivity.type)) return false;
       if (pairForPlanned(String(plannedItem.id))) return false;
       if (pairForStrava(String(completedActivity.id))) return false;
       return true;
@@ -992,10 +994,29 @@
       document.getElementById('actionModal').classList.remove('open');
     }
 
+    function setEventReadonlyMode(readonly) {
+      const ids = ['dTitle', 'dDate', 'dEventType', 'dDescriptionOther'];
+      ids.forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (readonly) el.setAttribute('disabled', 'disabled');
+        else el.removeAttribute('disabled');
+      });
+    }
+
     function openDetailModal(existingItem) {
       closeActionModal();
+      const modal = document.getElementById('detailModal');
+      const isEventCreate = selectedKind === 'event' && !existingItem;
+      const isEventEdit = selectedKind === 'event' && !!existingItem;
+      const isEventReadonly = isEventEdit;
       const metrics = buildMetricsToDate(selectedDate);
-      document.getElementById('detailDateLabel').textContent = fmtDateUpper(selectedDate);
+      const detailDateLabel = document.getElementById('detailDateLabel');
+      if (isEventCreate) {
+        detailDateLabel.innerHTML = '<span class="detail-event-flag" aria-hidden="true"></span> Add Event';
+      } else {
+        detailDateLabel.textContent = fmtDateUpper(selectedDate);
+      }
       document.getElementById('miniCtl').textContent = `Fitness ${metrics.ctl}`;
       document.getElementById('miniAtl').textContent = `Fatigue ${metrics.atl}`;
       document.getElementById('miniTsb').textContent = `Form ${metrics.tsb > 0 ? '+' + metrics.tsb : metrics.tsb}`;
@@ -1011,7 +1032,29 @@
 
       document.getElementById('detailTitleLabel').textContent = titleMap[selectedKind] || 'Title';
       editingItemId = existingItem ? existingItem.id : null;
+      const saveBtn = document.getElementById('saveDetail');
+      const closeBtn = document.getElementById('saveCloseDetail');
       document.getElementById('deleteDetail').style.visibility = editingItemId ? 'visible' : 'hidden';
+      document.getElementById('closeDetail').style.visibility = 'visible';
+      saveBtn.textContent = 'Save';
+      closeBtn.textContent = isEventCreate ? 'Cancel' : 'Save & Close';
+      saveBtn.className = `btn ${isEventCreate ? 'primary' : 'secondary'}`;
+      closeBtn.className = `btn ${isEventCreate ? 'secondary' : 'primary'}`;
+      saveBtn.style.order = isEventCreate ? '2' : '2';
+      closeBtn.style.order = isEventCreate ? '1' : '3';
+      modal.dataset.eventCreate = isEventCreate ? '1' : '0';
+      modal.dataset.eventEdit = isEventEdit ? '1' : '0';
+      modal.dataset.eventReadonly = isEventReadonly ? '1' : '0';
+      modal.classList.toggle('detail-event-create', isEventCreate);
+      modal.classList.toggle('detail-event-edit', isEventEdit);
+      if (isEventReadonly) {
+        saveBtn.textContent = 'Edit Event';
+        closeBtn.textContent = 'Close';
+        saveBtn.className = 'btn secondary';
+        closeBtn.className = 'btn primary';
+        saveBtn.style.order = '2';
+        closeBtn.style.order = '3';
+      }
 
       document.getElementById('dDate').value = existingItem ? existingItem.date : selectedDate;
       document.getElementById('dTitle').value = existingItem ? (existingItem.title || '') : '';
@@ -1026,12 +1069,12 @@
         document.getElementById('dDistance').value = '';
       }
       document.getElementById('dIntensity').value = existingItem ? (existingItem.intensity || 6) : '6';
-      document.getElementById('dEventType').value = existingItem ? (existingItem.event_type || 'Road Running') : 'Road Running';
+      document.getElementById('dEventType').value = existingItem ? (existingItem.event_type || '') : '';
       document.getElementById('dAvailability').value = existingItem ? (existingItem.availability || 'Unavailable') : 'Unavailable';
-      const activePriority = existingItem ? (existingItem.priority || 'C') : 'C';
-      document.querySelectorAll('#dEventPriority .seg-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.priority === activePriority);
-      });
+      const dateLabelNode = document.querySelector('#eventFields .field label');
+      if (dateLabelNode) dateLabelNode.textContent = 'Event type';
+      const dateMainLabel = document.querySelector('#dDate')?.closest('.field')?.querySelector('label');
+      if (selectedKind === 'event' && dateMainLabel) dateMainLabel.textContent = 'Event date';
 
       document.getElementById('workoutFields').classList.toggle('hidden', selectedKind !== 'workout');
       document.getElementById('eventFields').classList.toggle('hidden', selectedKind !== 'event');
@@ -1041,16 +1084,37 @@
       document.querySelector('.detail-right').style.display = isWorkout ? 'block' : 'none';
       document.querySelector('.detail-body').style.gridTemplateColumns = isWorkout ? '1fr 340px' : '1fr';
       document.getElementById('nonWorkoutDescription').style.display = isWorkout ? 'none' : 'block';
+      if (selectedKind === 'event') setEventReadonlyMode(isEventReadonly);
+      else setEventReadonlyMode(false);
 
       document.getElementById('detailModal').classList.add('open');
       captureDetailInitialState();
     }
 
     function closeDetailModal() {
-      document.getElementById('detailModal').classList.remove('open');
+      const modal = document.getElementById('detailModal');
+      modal.classList.remove('open', 'detail-event-create', 'detail-event-edit');
+      modal.dataset.eventCreate = '0';
+      modal.dataset.eventEdit = '0';
+      modal.dataset.eventReadonly = '0';
+      detailSaving = false;
+      setEventReadonlyMode(false);
     }
 
     async function saveDetail(closeAfter) {
+      const modal = document.getElementById('detailModal');
+      if (detailSaving) return;
+      if (selectedKind === 'event' && modal.dataset.eventReadonly === '1') {
+        modal.dataset.eventReadonly = '0';
+        setEventReadonlyMode(false);
+        document.getElementById('saveDetail').textContent = 'Save';
+        document.getElementById('saveCloseDetail').textContent = 'Close';
+        document.getElementById('detailDateLabel').textContent = 'EDIT EVENT';
+        return;
+      }
+      if (selectedKind === 'event' && modal.dataset.eventCreate === '1') {
+        closeAfter = true;
+      }
       const payload = {
         kind: selectedKind,
         date: document.getElementById('dDate').value,
@@ -1069,8 +1133,8 @@
 
       if (selectedKind === 'event') {
         payload.event_type = document.getElementById('dEventType').value;
-        const activeP = document.querySelector('#dEventPriority .seg-btn.active');
-        payload.priority = activeP ? activeP.dataset.priority : 'C';
+        if (!String(payload.event_type || '').trim()) return;
+        payload.priority = 'C';
       }
 
       if (selectedKind === 'availability') {
@@ -1079,6 +1143,7 @@
 
       const url = editingItemId ? `/calendar-items/${editingItemId}` : '/calendar-items';
       const method = editingItemId ? 'PUT' : 'POST';
+      detailSaving = true;
       const resp = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
@@ -1088,6 +1153,7 @@
       if (!resp.ok) {
         const err = await resp.text();
         console.error('Could not save item:', err);
+        detailSaving = false;
         return;
       }
 
@@ -1095,6 +1161,7 @@
       if (closeAfter) {
         closeDetailModal();
       }
+      detailSaving = false;
     }
 
     function deleteCurrentDetail() {
@@ -1307,14 +1374,23 @@
       }
       const planned = calendarItems.find(i => String(i.id) === String(plannedId));
       const completed = activities.find(a => String(a.id) === String(stravaId));
+      if (!planned || !completed) return;
 
-      const cDur  = hms(Number(completed && completed.moving_time || 0));
-      const cDist = completed ? fmtDistanceMeters(Number(completed.distance || 0)) : '--';
-      const cTss  = completed ? Math.round(activityToTss(completed)) : 0;
-      const pDur  = planned ? formatDurationClockCompact(Number(planned.duration_min || 0)) : '--';
-      const sportKey = planned ? workoutTypeSportKey(planned.workout_type) : 'other';
+      const cDur  = hms(Number(completed.moving_time || 0));
+      const cDist = fmtDistanceMeters(Number(completed.distance || 0));
+      const cTss  = Math.round(activityToTss(completed));
+      const pDur  = formatDurationClockCompact(Number(planned.duration_min || 0));
+      const pDistMeters = Number(planned.distance_m || Number(planned.distance_km || 0) * 1000);
+      const pDist = pDistMeters > 0 ? fmtDistanceMetersInUnit(pDistMeters, planned.distance_unit || distanceUnit || 'km') : '--';
+      const pTssRaw = Math.round(itemToTss(planned));
+      const pTss = pTssRaw > 0 ? pTssRaw : '--';
+      const sportKey = workoutTypeSportKey(planned.workout_type || completed.type);
       const iconSrc = ICON_ASSETS[sportKey] || ICON_ASSETS.other;
-      const type = (planned && planned.workout_type) || (completed && completed.type) || 'Workout';
+      const type = canonicalWorkoutType(planned.workout_type || completed.type || 'Workout', 'Workout');
+      const plannedTitle = String(planned.title || `Untitled ${type} Workout`).trim() || `Untitled ${type} Workout`;
+      const completedTitle = String(completed.name || `Untitled ${type} Workout`).trim() || `Untitled ${type} Workout`;
+      const plannedStatus = complianceStatus(planned, null, String(planned.date || todayKey())).cls;
+      const plannedPreviewClass = plannedStatus === 'paired-red' ? 'pair-preview-status-red' : 'pair-preview-status-white';
 
       const overlay = document.createElement('div');
       overlay.className = 'pair-confirm-overlay';
@@ -1324,30 +1400,25 @@
           <p class="pair-confirm-sub">Pairing will attach the completed workout to the planned workout. All of your data, descriptions, and comments will remain intact.</p>
           <div class="pair-confirm-preview">
             <div class="pair-preview-col">
-              <p class="pair-preview-label">Completed</p>
-              <div class="pair-preview-card pair-preview-done">
+              <p class="pair-preview-label">PLANNED</p>
+              <div class="pair-preview-card pair-preview-planned ${plannedPreviewClass}">
                 <img src="${iconSrc}" class="pair-preview-icon" />
-                <strong>${type}</strong>
-                <span>${cDur}&#10003;</span>
-                <span>${cDist}</span>
-                <span>${cTss} TSS</span>
-              </div>
-              <p class="pair-preview-label" style="margin-top:10px;">Planned</p>
-              <div class="pair-preview-card pair-preview-planned">
-                <img src="${iconSrc}" class="pair-preview-icon" />
+                <strong>${plannedTitle}</strong>
                 <span>${pDur}</span>
+                <span>${pDist}</span>
+                <span>${pTss} TSS</span>
               </div>
             </div>
             <div class="pair-confirm-arrow">&#8594;</div>
             <div class="pair-preview-col">
-              <div class="pair-preview-card pair-preview-merged">
+              <p class="pair-preview-label">COMPLETED</p>
+              <div class="pair-preview-card pair-preview-done">
                 <img src="${iconSrc}" class="pair-preview-icon" />
+                <strong>${completedTitle}</strong>
                 <span>${cDur}&#10003;</span>
                 <span>${cDist}</span>
                 <span>${cTss} TSS</span>
-                <span class="pair-preview-planned-line">P: ${pDur}</span>
               </div>
-              <p class="pair-preview-label pair-label-merged">Planned and<br>Completed</p>
             </div>
           </div>
           <label class="pair-confirm-skip">
@@ -1377,7 +1448,7 @@
       const planned = calendarItems.find(i => String(i.id) === String(plannedId));
       const completed = activities.find(a => String(a.id) === String(stravaId));
       if (!canPairWorkouts(planned, completed)) return;
-      const inheritedType = (planned && planned.workout_type) ? planned.workout_type : ((completed && completed.type) ? completed.type : 'Workout');
+      const inheritedType = canonicalWorkoutType((planned && planned.workout_type) ? planned.workout_type : ((completed && completed.type) ? completed.type : 'Workout'), 'Workout');
       const plannedTitle = (planned && String(planned.title || '').trim()) || `Untitled ${inheritedType} Workout`;
       await fetch('/pairs', {
         method: 'POST',
@@ -1594,9 +1665,12 @@
           tss_override: data.tss_override || null,
         } : null,
         commentsFeed: commentsArrayFromEntity(parentPlanned || data),
-        sportType: parentPlanned
-          ? (parentPlanned.workout_type || 'Other')
-          : payload.source === 'strava' ? (data.type || 'Other') : (data.workout_type || 'Other'),
+        sportType: canonicalWorkoutType(
+          parentPlanned
+            ? (parentPlanned.workout_type || 'Other')
+            : payload.source === 'strava' ? (data.type || data.workout_type || 'Other') : (data.workout_type || 'Other'),
+          'Other'
+        ),
         rpeTouched: false,
       };
       const typeLabel = parentPlanned
@@ -1613,7 +1687,7 @@
       document.getElementById('wvTitle').value = parentPlanned ? (parentPlanned.title || 'Workout') : (data.title || data.name || 'Workout');
       const subNode = document.getElementById('wvSub');
       if (subNode) subNode.textContent = `${typeLabel} • ${dateLabel}`;
-      modalDraft.sportType = WORKOUT_TYPES.some(([n]) => n === modalDraft.sportType) ? modalDraft.sportType : 'Other';
+      modalDraft.sportType = canonicalWorkoutType(modalDraft.sportType, 'Other');
       document.getElementById('wvSportIcon').innerHTML = toSportIcon(modalDraft.sportType);
       document.getElementById('wvSportName').textContent = modalDraft.sportType;
       document.getElementById('wvCommentInput').value = '';
@@ -1998,7 +2072,9 @@
         : explicitCompleted ? Number(explicitCompleted.tss_override || 0) : 0;
       const typeLabel = parentPlanned
         ? (parentPlanned.workout_type || 'Workout')
-        : payload.source === 'strava' ? (data.type || 'Workout') : (data.workout_type || 'Workout');
+        : payload.source === 'strava'
+          ? canonicalWorkoutType(data.type || data.workout_type || 'Workout', 'Workout')
+          : (data.workout_type || 'Workout');
       const dateLabel = parentPlanned
         ? `${parentPlanned.date} (Planned Day)`
         : payload.source === 'strava'
@@ -2055,23 +2131,21 @@
       if (!completedTss) completedTss = null;
       if (isCycling && !completedNp) completedIf = null;
 
-      // TSS source toggle — shown only when both power and hrTSS are available
-      const tssSourceRow = document.getElementById('wvTssSourceRow');
-      tssSourceRow.style.display = hasBothTss ? '' : 'none';
-      if (hasBothTss) {
-        document.querySelectorAll('#wvTssSourceToggle .seg-btn').forEach(btn => {
-          btn.classList.toggle('active', btn.dataset.source === activeTssSource);
-          btn.onclick = () => {
-            activeTssSource = btn.dataset.source;
-            completedTss = activeTssSource === 'hr' ? hrTssValue : powerTssValue;
-            document.querySelectorAll('#wvTssSourceToggle .seg-btn').forEach(b => b.classList.toggle('active', b.dataset.source === activeTssSource));
-            document.getElementById('pcTssComp').value = completedTss ? String(Math.round(completedTss)) : '';
-            document.getElementById('wvHeaderTss').textContent = completedTss ? `${Math.round(completedTss)} TSS` : '-- TSS';
-            if (modalDraft) modalDraft.tssSource = activeTssSource;
-          };
-        });
-        if (modalDraft) modalDraft.tssSource = activeTssSource;
+      const tssUnitLabel = document.getElementById('pcTssUnitLabel');
+      const tssCompUnit = document.getElementById('pcTssCompUnit');
+      if (tssCompUnit) {
+        tssCompUnit.style.display = hasBothTss ? '' : 'none';
+        tssCompUnit.value = activeTssSource === 'hr' ? 'hr' : 'power';
+        tssCompUnit.onchange = () => {
+          activeTssSource = tssCompUnit.value === 'hr' ? 'hr' : 'power';
+          completedTss = activeTssSource === 'hr' ? (hrTssValue || powerTssValue) : (powerTssValue || hrTssValue);
+          document.getElementById('pcTssComp').value = completedTss ? String(Math.round(completedTss)) : '';
+          document.getElementById('wvHeaderTss').textContent = completedTss ? `${Math.round(completedTss)} TSS` : '-- TSS';
+          if (modalDraft) modalDraft.tssSource = activeTssSource;
+        };
       }
+      if (tssUnitLabel) tssUnitLabel.style.display = hasBothTss ? 'none' : '';
+      if (modalDraft) modalDraft.tssSource = activeTssSource;
       const completedWorkKj = Number((data.work_kj ?? plannedObj.completed_work_kj ?? 0) || 0);
       const completedCalories = Number((data.calories ?? plannedObj.completed_calories ?? 0) || 0);
       const plannedAvgSpeed = Number(plannedObj.planned_avg_speed || 0);
@@ -3362,43 +3436,45 @@
       const featured = upcoming[0];
       const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
       const todayDate = parseDateKey(today);
-      upcoming.forEach((e) => {
-        const eDate = parseDateKey(e.date);
-        const daysUntil = Math.round((eDate - todayDate) / 86400000);
-        const countdownText = eventCountdownLabel(daysUntil);
-        const mo = months[eDate.getMonth()];
-        const dy = String(eDate.getDate());
-        const item = document.createElement('div');
-        item.className = 'event-item-clean';
-        item.innerHTML = `
-          <div class="event-clean-row">
-            <span class="event-clean-tag" aria-hidden="true">
-              <span class="event-clean-tag-month">${mo}</span>
-              <span class="event-clean-tag-day">${dy}</span>
-            </span>
-            <span class="event-clean-body">
-              <p class="event-clean-title">${e.title || 'Event'}</p>
-              <p class="event-clean-countdown">${countdownText}</p>
-            </span>
-          </div>
-        `;
-        item.style.cursor = 'pointer';
-        item.addEventListener('click', () => openDetailModal(e));
-        list.appendChild(item);
-      });
+      const fDate = parseDateKey(featured.date);
+      const fDaysUntil = Math.round((fDate - todayDate) / 86400000);
+      const fCountdownText = eventCountdownLabel(fDaysUntil);
+      const featuredItem = document.createElement('div');
+      featuredItem.className = 'event-item-clean';
+      featuredItem.innerHTML = `
+        <div class="event-clean-row">
+          <span class="event-clean-tag" aria-hidden="true">
+            <span class="event-clean-tag-month">${months[fDate.getMonth()]}</span>
+            <span class="event-clean-tag-day">${String(fDate.getDate())}</span>
+          </span>
+          <span class="event-clean-body">
+            <p class="event-clean-title">${featured.title || 'Event'}</p>
+            <p class="event-clean-countdown">${fCountdownText}</p>
+          </span>
+        </div>
+      `;
+      featuredItem.style.cursor = 'pointer';
+      featuredItem.addEventListener('click', () => openDetailModal(featured));
+      list.appendChild(featuredItem);
 
       const chartDiv = document.createElement('div');
       chartDiv.className = 'event-ctl-chart-wrap';
       renderEventCtlChart(chartDiv, featured);
       list.appendChild(chartDiv);
 
-      const featuredDate = parseDateKey(featured.date);
-      const featuredMo = months[featuredDate.getMonth()];
-      const featuredDy = String(featuredDate.getDate());
-      const graphMeta = document.createElement('p');
-      graphMeta.className = 'event-graph-meta';
-      graphMeta.innerHTML = `<span class="event-clean-inline-date">${featuredMo} ${featuredDy}</span><span class="event-clean-inline-name">${featured.title || 'Event'}</span>`;
-      list.appendChild(graphMeta);
+      const table = document.createElement('div');
+      table.className = 'events-table';
+      upcoming.forEach((e, idx) => {
+        const eDate = parseDateKey(e.date);
+        const label = eDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = `events-row${idx % 2 ? ' events-row-alt' : ''}`;
+        row.innerHTML = `<span class="events-row-date">${label}</span><span class="events-row-title">${e.title || 'Untitled Event'}</span>`;
+        row.addEventListener('click', () => openDetailModal(e));
+        table.appendChild(row);
+      });
+      list.appendChild(table);
     }
 
     function renderGoals() {
@@ -3530,6 +3606,16 @@
       if (t.includes('row')) return 'row';
       if (t.includes('strength') || t.includes('weight')) return 'strength';
       return 'other';
+    }
+
+    function canonicalWorkoutType(type, fallback = 'Other') {
+      const key = workoutTypeSportKey(type);
+      if (key === 'ride') return 'Bike';
+      if (key === 'run') return 'Run';
+      if (key === 'swim') return 'Swim';
+      if (key === 'row') return 'Rowing';
+      if (key === 'strength') return 'Strength';
+      return WORKOUT_TYPES.some(([name]) => name === String(type || '')) ? String(type) : fallback;
     }
 
     function buildPowerZones(ftp, sportLabel) {
@@ -3691,11 +3777,10 @@
         const tss = itemToTss(p);
         const card = document.createElement('div');
         card.className = 'today-card today-card-planned';
-        card.innerHTML = `
-          <div class="today-card-sport today-card-sport-planned">
+          card.innerHTML = `
+            <div class="today-card-sport today-card-sport-planned">
             ${p.workout_type || 'Workout'}
-            <span class="badge planned" style="margin-left:auto;">Planned</span>
-          </div>
+            </div>
           <div class="today-card-stats">
             <img class="today-card-icon" src="${iconSrc}" alt="${p.workout_type}" />
             <span class="today-stat-big">${plannedMin ? plannedMin + ' min' : '--'}</span>
@@ -3830,7 +3915,6 @@
             card.innerHTML = `
               <div class="today-card-sport today-card-sport-planned">
                 ${p.workout_type || 'Workout'}
-                <span class="badge planned" style="margin-left:auto;">Planned</span>
               </div>
               <div class="today-card-stats">
                 <img class="today-card-icon" src="${iconSrc}" alt="${p.workout_type}" />
@@ -4658,9 +4742,23 @@
     document.getElementById('closeDetail').addEventListener('click', closeDetailWithUnsavedCheck);
     document.getElementById('deleteDetail').addEventListener('click', deleteCurrentDetail);
     document.getElementById('saveDetail').addEventListener('click', () => saveDetail(false));
-    document.getElementById('saveCloseDetail').addEventListener('click', () => saveDetail(true));
+    document.getElementById('saveCloseDetail').addEventListener('click', () => {
+      const modal = document.getElementById('detailModal');
+      if (modal.dataset.eventCreate === '1') {
+        closeDetailModal();
+        return;
+      }
+      if (modal.dataset.eventReadonly === '1') {
+        closeDetailModal();
+        return;
+      }
+      saveDetail(true);
+    });
     document.getElementById('detailModal').addEventListener('click', (event) => {
-      if (event.target.id === 'detailModal') closeDetailModal();
+      if (event.target.id !== 'detailModal') return;
+      const modal = document.getElementById('detailModal');
+      if (modal.dataset.eventCreate === '1') return;
+      closeDetailModal();
     });
 
     async function closeWorkoutWithUnsavedFlow() {

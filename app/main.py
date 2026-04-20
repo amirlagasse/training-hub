@@ -513,10 +513,43 @@ def get_imported_activity_raw(activity_id: str) -> sqlite3.Row | None:
 
 def apply_parsed_fit_to_activity(item: dict[str, Any], parsed: dict[str, Any], file_id: str, filename: str) -> dict[str, Any]:
     summary = parsed.get("summary", {})
+    laps = parsed.get("laps", []) if isinstance(parsed.get("laps"), list) else []
+    lap_duration_s = 0.0
+    for lap in laps:
+        if isinstance(lap, dict):
+            try:
+                lap_duration_s += float(lap.get("duration_s") or 0)
+            except (TypeError, ValueError):
+                pass
+    duration_s = float(summary.get("duration_s") or 0)
+    if duration_s <= 0 and lap_duration_s > 0:
+        duration_s = lap_duration_s
+    if duration_s <= 0:
+        series = parsed.get("series", [])
+        if isinstance(series, list) and len(series) >= 2:
+            try:
+                start_ts = datetime.fromisoformat(str(series[0].get("timestamp")))
+                end_ts = datetime.fromisoformat(str(series[-1].get("timestamp")))
+                duration_s = max(0.0, (end_ts - start_ts).total_seconds())
+            except Exception:
+                pass
+
+    distance_m = float(summary.get("distance_m") or 0)
+    if distance_m <= 0 and laps:
+        lap_dist = 0.0
+        for lap in laps:
+            if isinstance(lap, dict):
+                try:
+                    lap_dist += float(lap.get("distance_m") or 0)
+                except (TypeError, ValueError):
+                    pass
+        if lap_dist > 0:
+            distance_m = lap_dist
+
     item["fit_id"] = file_id
     item["fit_filename"] = Path(filename).name
-    item["distance"] = float(summary.get("distance_m") or item.get("distance") or 0)
-    item["moving_time"] = float(summary.get("duration_s") or item.get("moving_time") or 0)
+    item["distance"] = float(distance_m or item.get("distance") or 0)
+    item["moving_time"] = float(duration_s or item.get("moving_time") or 0)
     if summary.get("start"):
         item["start_date_local"] = str(summary.get("start"))
     sport = str(summary.get("sport") or item.get("type") or "Ride").title()
@@ -1511,6 +1544,22 @@ def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) 
                 f"UPDATE activities SET {set_clause} WHERE id=?",
                 (*updates.values(), activity_id),
             )
+            # Keep override table aligned so stale pair overrides do not mask user edits.
+            if any(k in updates for k in ("type", "title")):
+                existing_override = db.execute(
+                    "SELECT * FROM activity_overrides WHERE id = ?", (activity_id,)
+                ).fetchone()
+                if existing_override:
+                    if "type" in updates:
+                        db.execute(
+                            "UPDATE activity_overrides SET type = ? WHERE id = ?",
+                            (updates.get("type"), activity_id),
+                        )
+                    if "title" in updates:
+                        db.execute(
+                            "UPDATE activity_overrides SET title = ? WHERE id = ?",
+                            (updates.get("title"), activity_id),
+                        )
         else:
             # Strava/external activity — use overrides table
             existing = db.execute(
@@ -1636,16 +1685,36 @@ def create_pair(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not planned_item:
         raise HTTPException(status_code=404, detail="Planned workout not found.")
 
+    def n(v: Any) -> float:
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def sport_key(v: Any) -> str:
+        t = str(v or "").strip().lower()
+        if any(x in t for x in ("ride", "bike", "cycl")):
+            return "ride"
+        if any(x in t for x in ("run", "walk")):
+            return "run"
+        if "swim" in t:
+            return "swim"
+        if "row" in t:
+            return "row"
+        if any(x in t for x in ("strength", "weight")):
+            return "strength"
+        return "other"
+
     has_planned_content = (
-        float(planned_item.get("duration_min") or 0) > 0
-        or float(planned_item.get("distance_km") or 0) > 0
-        or float(planned_item.get("planned_tss") or 0) > 0
+        n(planned_item.get("duration_min")) > 0
+        or n(planned_item.get("distance_km")) > 0
+        or n(planned_item.get("planned_tss")) > 0
     )
     has_completed_on_planned = (
-        float(planned_item.get("completed_duration_min") or 0) > 0
-        or float(planned_item.get("completed_distance_km") or 0) > 0
-        or float(planned_item.get("completed_tss") or 0) > 0
-        or float(planned_item.get("completed_if") or 0) > 0
+        n(planned_item.get("completed_duration_min")) > 0
+        or n(planned_item.get("completed_distance_km")) > 0
+        or n(planned_item.get("completed_tss")) > 0
+        or n(planned_item.get("completed_if")) > 0
     )
     if not has_planned_content or has_completed_on_planned:
         raise HTTPException(status_code=400, detail="Pairing requires a planned-only workout.")
@@ -1653,12 +1722,16 @@ def create_pair(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     completed_item = next((row for row in ui_activities() if str(row.get("id")) == strava_id), None)
     if not completed_item:
         raise HTTPException(status_code=404, detail="Completed workout not found.")
+    planned_key = sport_key(planned_item.get("workout_type"))
+    completed_key = sport_key(completed_item.get("type"))
+    if planned_key != completed_key:
+        raise HTTPException(status_code=400, detail="Pairing requires matching workout types.")
     completed_has_planned = (
-        float(completed_item.get("duration_min") or 0) > 0
-        or float(completed_item.get("distance_m") or 0) > 0
-        or float(completed_item.get("distance_km") or 0) > 0
-        or float(completed_item.get("planned_tss") or 0) > 0
-        or float(completed_item.get("planned_if") or 0) > 0
+        n(completed_item.get("duration_min")) > 0
+        or n(completed_item.get("distance_m")) > 0
+        or n(completed_item.get("distance_km")) > 0
+        or n(completed_item.get("planned_tss")) > 0
+        or n(completed_item.get("planned_if")) > 0
     )
     if completed_has_planned:
         raise HTTPException(status_code=400, detail="Pairing requires a completed-only workout.")
@@ -1707,14 +1780,39 @@ def delete_pair(pair_id: str) -> dict[str, bool]:
 
     strava_id = str(found.get("strava_id", "")).strip()
     planned_id = str(found.get("planned_id", "")).strip()
-    planned_item = next((row for row in load_calendar_items() if str(row.get("id")) == planned_id and row.get("kind") == "workout"), None)
-    inherited_type = str((planned_item or {}).get("workout_type") or "Workout").strip() or "Workout"
+    planned_items = load_calendar_items()
+    planned_item = next((row for row in planned_items if str(row.get("id")) == planned_id and row.get("kind") == "workout"), None)
+    planned_date = str((planned_item or {}).get("date") or "").strip()
+    if planned_item:
+        reset_fields = (
+            "completed_duration_min", "completed_distance_km", "completed_distance_m",
+            "completed_elevation_m", "completed_tss", "completed_if", "completed_np",
+            "completed_work_kj", "completed_calories", "completed_avg_speed",
+            "completed_hr_min", "completed_hr_avg", "completed_hr_max",
+            "completed_power_min", "completed_power_avg", "completed_power_max",
+        )
+        for field in reset_fields:
+            planned_item[field] = 0
+        for i, row in enumerate(planned_items):
+            if str(row.get("id")) == planned_id:
+                planned_items[i] = planned_item
+                break
+        save_calendar_items(planned_items)
+
     if strava_id:
         overrides = load_activity_overrides()
         current = overrides.get(strava_id, {})
-        current["type"] = inherited_type
-        current["title"] = f"Untitled {inherited_type} Workout"
-        overrides[strava_id] = current
+        if planned_date:
+            current["date"] = planned_date
+        for key in ("date", "type", "title"):
+            if key in current and key != "date":
+                current.pop(key, None)
+        if planned_date:
+            current["date"] = planned_date
+        if current:
+            overrides[strava_id] = current
+        elif strava_id in overrides:
+            overrides.pop(strava_id, None)
         save_activity_overrides(overrides)
 
     return {"ok": True}

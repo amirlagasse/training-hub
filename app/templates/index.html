@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260416y" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260420d" />
 </head>
 <body>
   <header class="top-nav">
@@ -367,6 +367,7 @@
               <div class="field">
                 <label>Event Type</label>
                 <select id="dEventType">
+                  <option value="">Select type</option>
                   <optgroup label="Running">
                     <option>Road Running</option>
                     <option>Trail Running</option>
@@ -411,14 +412,6 @@
                     <option>Other</option>
                   </optgroup>
                 </select>
-              </div>
-              <div class="field">
-                <label>Priority</label>
-                <div class="seg-toggle" id="dEventPriority">
-                  <button type="button" class="seg-btn" data-priority="A">A</button>
-                  <button type="button" class="seg-btn" data-priority="B">B</button>
-                  <button type="button" class="seg-btn active" data-priority="C">C</button>
-                </div>
               </div>
             </div>
 
@@ -559,15 +552,13 @@
                       <label>TSS</label>
                       <input id="pcTssPlan" class="tp-in" />
                       <input id="pcTssComp" class="tp-in" />
-                      <div class="tp-unit">TSS</div>
-                    </div>
-                    <div id="wvTssSourceRow" class="tp-row" style="display:none;">
-                      <label style="color:var(--muted);font-size:11px;">TSS Source</label>
-                      <div style="grid-column:2/4;" class="seg-toggle seg-toggle-sm" id="wvTssSourceToggle">
-                        <button type="button" class="seg-btn active" data-source="power">Power</button>
-                        <button type="button" class="seg-btn" data-source="hr">HR</button>
+                      <div class="tp-unit">
+                        <span id="pcTssUnitLabel">TSS</span>
+                        <select id="pcTssCompUnit" class="tp-unit-select" style="display:none;">
+                          <option value="power">TSS</option>
+                          <option value="hr">hrTSS</option>
+                        </select>
                       </div>
-                      <div></div>
                     </div>
                     <div class="tp-row">
                       <label>IF</label>
@@ -622,7 +613,7 @@
                     <div class="field">
                       <label>How did you feel?</label>
                       <div class="feel-row" id="feelRow">
-                        <button class="feel-btn" type="button" data-feel="1" title="Very Weak"><img src="/icons/workouts/run.png" width="28" height="28"></button><!--😫</button>-->
+                        <button class="feel-btn" type="button" data-feel="1" title="Very Weak">😫</button>
                         <button class="feel-btn" type="button" data-feel="2" title="Weak">🙁</button>
                         <button class="feel-btn" type="button" data-feel="3" title="Normal">😐</button>
                         <button class="feel-btn" type="button" data-feel="4" title="Strong">🙂</button>
@@ -766,6 +757,6 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js?v=20260416y"></script>
+    <script src="/static/js/app.js?v=20260420d"></script>
 </body>
 </html>

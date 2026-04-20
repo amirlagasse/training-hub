@@ -948,8 +948,6 @@
 
     .zones-col { display: grid; gap: 24px; }
 
-    .zones-block { }
-
     .zones-title {
       font-size: 14px;
       font-weight: 700;
@@ -1721,13 +1719,14 @@
     .ws-value-row {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      column-gap: 6px;
+      column-gap: 0;
       align-items: center;
+      justify-items: center;
     }
 
     .ws-label-row span {
       line-height: 1.2;
-      text-align: left;
+      text-align: center;
       font-size: 9.5px;
       font-weight: 700;
       color: #4c627a;
@@ -1735,10 +1734,12 @@
     .ws-label-row .ws-ctl { color: var(--blue); }
     .ws-label-row .ws-atl { color: var(--pink); }
     .ws-label-row .ws-tsb { color: var(--orange); }
+    .ws-label-row .ws-ctl { transform: translateX(-6px); }
+    .ws-label-row .ws-tsb { transform: translateX(6px); }
 
     .ws-value-row span {
       line-height: 1.25;
-      text-align: left;
+      text-align: center;
       font-size: 9.5px;
       font-weight: 700;
     }
@@ -1746,6 +1747,8 @@
     .ws-value-row .ws-ctl { color: var(--blue); }
     .ws-value-row .ws-atl { color: var(--pink); }
     .ws-value-row .ws-tsb { color: var(--orange); }
+    .ws-value-row .ws-ctl { transform: translateX(-6px); }
+    .ws-value-row .ws-tsb { transform: translateX(6px); }
 
     .ws-row {
       display: flex;
@@ -1826,9 +1829,21 @@
       font-size: 11px; display: flex; flex-direction: column; gap: 2px;
       min-width: 120px; background: var(--bg);
     }
-    .pair-preview-done   { border-top-color: #5dc95a; background: #f5fff4; }
+    .pair-preview-card strong {
+      display: block;
+      margin-bottom: 2px;
+      font-size: 11px;
+      line-height: 1.3;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 180px;
+    }
+    .pair-preview-done   { border-top-color: #c7d5e6; background: #ffffff; }
     .pair-preview-planned { border-top-color: #c7d5e6; }
-    .pair-preview-merged  { border-top-color: #5dc95a; background: #f5fff4; }
+    .pair-preview-merged  { border-top-color: #c7d5e6; background: #ffffff; }
+    .pair-preview-status-red { border-top-color: #e05b68; background: #fff5f6; }
+    .pair-preview-status-white { border-top-color: #c7d5e6; background: #ffffff; }
     .pair-preview-icon { width: 18px; height: 18px; object-fit: contain; margin-bottom: 2px; }
     .pair-preview-planned-line { color: var(--muted); font-size: 10px; margin-top: 2px; }
     .pair-confirm-arrow {
@@ -1854,9 +1869,11 @@
     }
     .pair-confirm-btns .btn-primary:hover { background: #1749b8; }
 
-    [data-theme="dark"] .pair-preview-done    { background: #0d2118; }
-    [data-theme="dark"] .pair-preview-merged  { background: #0d2118; }
-    [data-theme="dark"] .pair-preview-planned { background: var(--bg); }
+    [data-theme="dark"] .pair-preview-done    { background: #151c27; border-top-color: #3d4a59; }
+    [data-theme="dark"] .pair-preview-merged  { background: #151c27; border-top-color: #3d4a59; }
+    [data-theme="dark"] .pair-preview-planned { background: #151c27; border-top-color: #3d4a59; }
+    [data-theme="dark"] .pair-preview-status-red { background: #200d10; border-top-color: #f85149; }
+    [data-theme="dark"] .pair-preview-status-white { background: #151c27; border-top-color: #3d4a59; }
 
     .modal.open { display: flex; }
 
@@ -2004,6 +2021,42 @@
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.2px;
+    }
+
+    .detail-event-flag {
+      display: inline-block;
+      width: 14px;
+      height: 16px;
+      margin-right: 8px;
+      vertical-align: -2px;
+      background: #1f5bd9;
+      border: 1px solid #1f5bd9;
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 82%, 0 100%);
+    }
+
+    #detailModal.detail-event-create .modal-card,
+    #detailModal.detail-event-edit .modal-card {
+      width: min(520px, 92vw);
+    }
+
+    #detailModal.detail-event-create .detail-shell,
+    #detailModal.detail-event-edit .detail-shell {
+      border-radius: 0;
+    }
+
+    #detailModal.detail-event-create .detail-top,
+    #detailModal.detail-event-edit .detail-top {
+      grid-template-columns: 1fr auto;
+    }
+
+    #detailModal.detail-event-create .modal-footer,
+    #detailModal.detail-event-edit .modal-footer {
+      justify-content: flex-end;
+    }
+
+    #detailModal.detail-event-create #deleteDetail,
+    #detailModal.detail-event-edit #deleteDetail {
+      display: none;
     }
 
     .mini-chip {
@@ -3061,6 +3114,13 @@
       padding: 5px 7px;
       font-size: 14px;
       font-family: inherit;
+    }
+
+    #pcTssCompUnit {
+      max-width: 80px;
+      height: 28px;
+      font-size: 12px;
+      padding: 2px 6px;
     }
 
     .tp-minmax-head {
