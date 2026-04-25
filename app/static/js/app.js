@@ -545,14 +545,137 @@
       return !!(node && node.classList.contains('active'));
     }
 
-    function setView(name) {
+    function parseWorkoutStartMs(entry) {
+      if (!entry) return Number.POSITIVE_INFINITY;
+      if (entry.kind === 'planned') {
+        const completed = entry.completed;
+        if (completed && completed.start_date_local) {
+          const ms = new Date(completed.start_date_local).getTime();
+          return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+        }
+        const planned = entry.planned || {};
+        const startRaw = planned.start_time || planned.startTime || '';
+        const hhmm = normalizeTimeHHMM(startRaw);
+        if (!hhmm) return Number.POSITIVE_INFINITY;
+        const baseDate = String(planned.date || '').trim();
+        if (!baseDate) return Number.POSITIVE_INFINITY;
+        const ms = new Date(`${baseDate}T${hhmm}:00`).getTime();
+        return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+      }
+      if (entry.kind === 'completed') {
+        const ms = new Date(entry.completed?.start_date_local || '').getTime();
+        return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+      }
+      return Number.POSITIVE_INFINITY;
+    }
+
+    function normalizeTimeHHMM(raw) {
+      const txt = String(raw || '').trim();
+      if (!txt) return '';
+      const hhmm = txt.match(/^(\d{1,2}):(\d{2})$/);
+      if (hhmm) {
+        const h = Math.max(0, Math.min(23, Number(hhmm[1])));
+        const m = Math.max(0, Math.min(59, Number(hhmm[2])));
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      }
+      const dt = new Date(txt);
+      if (!Number.isNaN(dt.getTime())) {
+        return `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+      }
+      return '';
+    }
+
+    function timeLabelFromHHMM(hhmm) {
+      const normalized = normalizeTimeHHMM(hhmm);
+      if (!normalized) return '8:00 am';
+      const [hTxt, mTxt] = normalized.split(':');
+      let h = Number(hTxt);
+      const m = Number(mTxt);
+      const ampm = h >= 12 ? 'pm' : 'am';
+      h %= 12;
+      if (h === 0) h = 12;
+      return `${h}:${String(m).padStart(2, '0')} ${ampm}`;
+    }
+
+    function buildTimeOptions(selectedHHMM) {
+      const values = [];
+      for (let h = 0; h < 24; h += 1) {
+        for (let m = 0; m < 60; m += 15) {
+          values.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+        }
+      }
+      const selected = floorToQuarterHHMM(selectedHHMM);
+      const idx = values.indexOf(selected);
+      if (idx < 0) return values;
+      return [...values.slice(idx), ...values.slice(0, idx)];
+    }
+
+    function floorToQuarterHHMM(hhmm) {
+      const normalized = normalizeTimeHHMM(hhmm);
+      if (!normalized) return '08:00';
+      const [hTxt, mTxt] = normalized.split(':');
+      const h = Number(hTxt);
+      const m = Number(mTxt);
+      const snapped = Math.max(0, Math.min(59, Math.floor(m / 15) * 15));
+      return `${String(h).padStart(2, '0')}:${String(snapped).padStart(2, '0')}`;
+    }
+
+    function inferWorkoutTimeHHMM(payload) {
+      const data = payload?.data || {};
+      const planned = payload?.planned || null;
+      if (data.start_date_local) {
+        const parsed = normalizeTimeHHMM(data.start_date_local);
+        if (parsed) return parsed;
+      }
+      if (planned && planned.start_date_local) {
+        const parsed = normalizeTimeHHMM(planned.start_date_local);
+        if (parsed) return parsed;
+      }
+      if (payload?.pair && payload.pair.strava_id) {
+        const linked = activities.find((a) => String(a.id) === String(payload.pair.strava_id));
+        if (linked?.start_date_local) {
+          const parsed = normalizeTimeHHMM(linked.start_date_local);
+          if (parsed) return parsed;
+        }
+      }
+      const startRaw = planned?.start_time || planned?.startTime || data.start_time || data.startTime;
+      const inferred = normalizeTimeHHMM(startRaw);
+      if (inferred) return inferred;
+      return '08:00';
+    }
+
+    function setWorkoutTimeInput(payload) {
+      const select = document.getElementById('wvTimeSelect');
+      if (!select) return;
+      const inferred = inferWorkoutTimeHHMM(payload);
+      const selected = floorToQuarterHHMM(inferred);
+      const options = buildTimeOptions(selected);
+      select.innerHTML = options
+        .map((value) => `<option value="${value}"${value === selected ? ' selected' : ''}>${timeLabelFromHHMM(value)}</option>`)
+        .join('');
+      select.title = timeLabelFromHHMM(selected);
+    }
+
+    function combineDateAndTimeIso(dateKey, hhmm, fallbackIso = '') {
+      const normalized = normalizeTimeHHMM(hhmm) || '08:00';
+      let day = String(dateKey || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+        const base = new Date(fallbackIso || new Date());
+        day = Number.isNaN(base.getTime()) ? todayKey() : dateKeyFromDate(base);
+      }
+      return `${day}T${normalized}:00`;
+    }
+
+    function setView(name, options = {}) {
+      const { suppressCalendarRender = false } = options;
       document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.view === name));
       document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
       document.getElementById('view-' + name).classList.add('active');
       const pageHead = document.querySelector('.page-head');
       if (pageHead) pageHead.classList.toggle('hidden', name === 'calendar' || name === 'home');
       document.getElementById('pageTitle').textContent = name.charAt(0).toUpperCase() + name.slice(1);
-      if (name === 'calendar') {
+      localStorage.setItem('activeView', name);
+      if (name === 'calendar' && !suppressCalendarRender) {
         if (!calendarState.hasRendered) {
           renderCalendar({ preserveScroll: false, anchorDate: calendarState.anchorDate, jumpToDate: calendarState.anchorDate });
         } else {
@@ -1083,13 +1206,70 @@
       return `<span class="wc-icon"><img src="${src}" alt="${key}" /></span>`;
     }
 
+    function normalizeFeelValue(v) {
+      const n = Number(v || 0);
+      if (!Number.isFinite(n) || n <= 0) return 0;
+      return Math.max(1, Math.min(5, Math.round(n)));
+    }
+
+    function decodeStoredFeelValue(v) {
+      const n = Number(v || 0);
+      if (!Number.isFinite(n) || n <= 0) return 0;
+      // TP legacy scale typically stores 1/3/5/7/9.
+      if ([1, 3, 5, 7, 9].includes(Math.round(n))) {
+        return Math.max(1, Math.min(5, Math.round((n + 1) / 2)));
+      }
+      if (n <= 5) return Math.max(1, Math.min(5, Math.round(n)));
+      if (n <= 10) return Math.max(1, Math.min(5, Math.round(n / 2)));
+      return Math.max(1, Math.min(5, Math.round(n)));
+    }
+
+    function encodeStoredFeelValue(v) {
+      const normalized = normalizeFeelValue(v);
+      if (!normalized) return 0;
+      return (normalized * 2) - 1;
+    }
+
+    function nonZeroNumber(...vals) {
+      for (const raw of vals) {
+        const n = Number(raw || 0);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return 0;
+    }
+
     function feelEmoji(v) {
       const map = { 1: '😫', 2: '🙁', 3: '😐', 4: '🙂', 5: '😁' };
-      return map[Number(v)] || '';
+      return map[normalizeFeelValue(v)] || '';
+    }
+
+    function feelIconMarkup(v, size = 'sm') {
+      const n = normalizeFeelValue(v);
+      if (!(n >= 1 && n <= 5)) return '';
+      const emoji = feelEmoji(n) || '';
+      const src = `/icons/feelings/feel-${n}.png`;
+      const altMap = {
+        1: '/icons/feelings/very_weak.png',
+        2: '/icons/feelings/weak.png',
+        3: '/icons/feelings/normal.png',
+        4: '/icons/feelings/strong.png',
+        5: '/icons/feelings/very_strong.png',
+      };
+      const altSrc = altMap[n] || '';
+      const cls = size === 'lg' ? 'feel-icon-lg' : 'feel-icon-sm';
+      return `<span class="feel-icon ${cls}"><img src="${src}" data-alt-src="${altSrc}" alt="${emoji}" onerror="if(this.dataset.altSrc && !this.dataset.triedAlt){this.dataset.triedAlt='1';this.src=this.dataset.altSrc;return;} this.style.display='none'; if(this.nextElementSibling){ this.nextElementSibling.style.display='inline'; }" /><span class="feel-icon-fallback">${emoji}</span></span>`;
+    }
+
+    function feelRpeMarkup(feel, rpe, size = 'sm') {
+      const icon = feelIconMarkup(decodeStoredFeelValue(feel), size);
+      const rv = Number(rpe || 0);
+      const r = rv > 0 ? `<span class="feel-rpe-num">${rv}</span>` : '';
+      if (!icon && !r) return '';
+      return `<span class="feel-rpe-pack">${icon}${r}</span>`;
     }
 
     function setFeelValue(v) {
-      currentFeel = Number(v || 0);
+      currentFeel = normalizeFeelValue(v);
       document.querySelectorAll('.feel-btn').forEach((btn) => {
         btn.classList.toggle('active', Number(btn.dataset.feel) === currentFeel);
       });
@@ -1101,13 +1281,13 @@
       if (!node) return;
       const f = Number(feel || 0);
       const r = Number(rpe || 0);
-      const icon = feelEmoji(f);
-      if (icon || r > 0) {
-        node.textContent = [icon, r > 0 ? String(r) : ''].filter(Boolean).join(' ');
+      const feelRpe = feelRpeMarkup(encodeStoredFeelValue(f), r, 'lg');
+      if (feelRpe) {
+        node.innerHTML = feelRpe;
         node.classList.remove('hidden');
         if (sep) sep.classList.remove('hidden');
       } else {
-        node.textContent = '';
+        node.innerHTML = '';
         node.classList.add('hidden');
         if (sep) sep.classList.add('hidden');
       }
@@ -1121,12 +1301,104 @@
       node.textContent = count > 0 ? `💬 x${count}` : '💬';
     }
 
+    function escapeHtml(s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function currentDisplayName() {
+      return 'Amir LaGasse';
+    }
+
+    function normalizeCommentAuthor(rawAuthor) {
+      const author = String(rawAuthor || '').trim();
+      if (!author) return currentDisplayName();
+      if (/^bench$/i.test(author)) return currentDisplayName();
+      return author;
+    }
+
+    function defaultCommentTimestamp(entity) {
+      const candidates = [
+        entity && entity.start_date_local,
+        entity && entity.created_at,
+        entity && entity.updated_at,
+        entity && entity.dateCreated,
+        entity && entity.date ? `${entity.date}T08:00:00` : '',
+      ];
+      for (const raw of candidates) {
+        const txt = String(raw || '').trim();
+        if (!txt) continue;
+        const dt = new Date(txt);
+        if (!Number.isNaN(dt.getTime())) return dt.toISOString();
+      }
+      return new Date().toISOString();
+    }
+
+    function prettyCommentTime(raw) {
+      if (!raw) return '';
+      const dt = new Date(raw);
+      if (Number.isNaN(dt.getTime())) return String(raw);
+      return dt.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+
+    function normalizeCommentEntry(entry) {
+      if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        const text = String(entry.text ?? entry.comment ?? entry.body ?? '').trim();
+        if (!text) return null;
+        const author = normalizeCommentAuthor(entry.author ?? entry.name ?? entry.commenterName ?? entry.user ?? '');
+        const at = String(entry.at ?? entry.created_at ?? entry.dateCreated ?? entry.timestamp ?? '').trim();
+        return {
+          text,
+          author: normalizeCommentAuthor(author),
+          at,
+        };
+      }
+      const raw = String(entry || '').trim();
+      if (!raw) return null;
+      const tagged = raw.match(/^\[([^\]|]+)\|([^\]]+)\]\s*(.+)$/);
+      if (tagged) {
+        return {
+          author: normalizeCommentAuthor(tagged[1]),
+          at: String(tagged[2] || '').trim(),
+          text: String(tagged[3] || '').trim(),
+        };
+      }
+      const prefixed = raw.match(/^([^:]{2,40}):\s+(.+)$/);
+      if (prefixed) {
+        return {
+          author: normalizeCommentAuthor(prefixed[1]),
+          at: '',
+          text: String(prefixed[2] || '').trim(),
+        };
+      }
+      return { author: currentDisplayName(), at: '', text: raw };
+    }
+
     function commentsArrayFromEntity(entity) {
       if (!entity) return [];
+      const fallbackAt = defaultCommentTimestamp(entity);
       if (Array.isArray(entity.comments_feed)) {
-        return entity.comments_feed.map((x) => String(x || '').trim()).filter(Boolean);
+        return entity.comments_feed
+          .map((x) => normalizeCommentEntry(x))
+          .filter(Boolean)
+          .map((x) => ({
+            ...x,
+            author: normalizeCommentAuthor(x.author),
+            at: String(x.at || '').trim() || fallbackAt,
+          }));
       }
-      if (typeof entity.comments === 'string' && entity.comments.trim()) return [entity.comments.trim()];
+      if (typeof entity.comments === 'string' && entity.comments.trim()) {
+        const fallback = normalizeCommentEntry(entity.comments.trim());
+        return fallback ? [{
+          ...fallback,
+          author: normalizeCommentAuthor(fallback.author),
+          at: String(fallback.at || '').trim() || fallbackAt,
+        }] : [];
+      }
       return [];
     }
 
@@ -1137,7 +1409,13 @@
         renderTopComments();
         return;
       }
-      const list = modalDraft.commentsFeed || [];
+      const fallbackAt = defaultCommentTimestamp(window.currentWorkoutPayload?.data || window.currentWorkoutPayload?.planned || null);
+      const list = (modalDraft.commentsFeed || []).map((c) => ({
+        ...c,
+        author: normalizeCommentAuthor(c.author),
+        at: String(c.at || '').trim() || fallbackAt,
+      }));
+      modalDraft.commentsFeed = list;
       if (!list.length) {
         wrap.innerHTML = '';
         renderTopComments();
@@ -1145,7 +1423,10 @@
       }
       wrap.innerHTML = list.map((c, i) => `
         <div class="comment-item" data-index="${i}">
-          <span class="comment-text" title="Double-click to edit">${c.replace(/</g, '&lt;')}</span>
+          <div class="comment-body">
+            <div class="comment-meta"><strong>${escapeHtml((c.author || '').trim() || currentDisplayName())}</strong>${c.at ? ` <span>${escapeHtml(prettyCommentTime(c.at))}</span>` : ''}</div>
+            <span class="comment-text" title="Double-click to edit">${escapeHtml(c.text || '')}</span>
+          </div>
           <button class="comment-delete" type="button" aria-label="Delete comment">🗑</button>
         </div>
       `).join('');
@@ -1173,6 +1454,15 @@
       }
       const n = Number(raw);
       return Number.isFinite(n) ? n : 0;
+    }
+
+    function autoSizeWorkoutDescription() {
+      const node = document.getElementById('wvDescription');
+      if (!node) return;
+      node.style.height = 'auto';
+      const nextHeight = Math.max(72, node.scrollHeight || 72);
+      node.style.height = `${nextHeight}px`;
+      node.style.overflowY = 'hidden';
     }
 
     function formatDurationClock(mins) {
@@ -1488,24 +1778,183 @@
       return `${h}:${String(m).padStart(2, '0')}`;
     }
 
+    function weeklySportKey(type) {
+      const t = String(type || '').toLowerCase();
+      if (t.includes('mountain') || t.includes('mtn bike') || t.includes('mtnbike')) return 'bike';
+      if (t.includes('bike') || t.includes('ride') || t.includes('cycl')) return 'bike';
+      if (t.includes('brick')) return 'brick';
+      if (t.includes('run')) return 'run';
+      if (t.includes('walk')) return 'walk';
+      if (t.includes('row')) return 'rowing';
+      if (t.includes('strength') || t.includes('lift')) return 'strength';
+      if (t.includes('swim')) return 'swim';
+      if (t.includes('ski')) return 'ski';
+      if (t.includes('cross')) return 'crosstrain';
+      if (t.includes('custom')) return 'custom';
+      if (t.includes('day off') || t === 'rest') return 'day_off';
+      return 'other';
+    }
+
+    function weeklySportLabel(key) {
+      const labels = {
+        bike: 'Bike Duration',
+        run: 'Run Duration',
+        rowing: 'Rowing Duration',
+        strength: 'Strength Duration',
+        swim: 'Swim Duration',
+        walk: 'Walk Duration',
+        brick: 'Brick Duration',
+        ski: 'XC Ski Duration',
+        crosstrain: 'Cross Train Duration',
+        custom: 'Custom Duration',
+        day_off: 'Day Off Duration',
+        other: 'Other Duration',
+      };
+      return labels[key] || 'Other Duration';
+    }
+
+    function weeklySportPalette(key) {
+      const palette = {
+        total: { dark: '#1f4fbf', light: '#79b6ff' },
+        bike: { dark: '#7a4ed9', light: '#b89aff' },
+        run: { dark: '#2f9f5b', light: '#87d9a6' },
+        strength: { dark: '#4f2a7f', light: '#9270be' },
+        rowing: { dark: '#2f70cc', light: '#8eb7f2' },
+        swim: { dark: '#2b9db7', light: '#82d4e6' },
+        walk: { dark: '#5e9f44', light: '#a9d39a' },
+        brick: { dark: '#cc7a2f', light: '#efb681' },
+        ski: { dark: '#3d7cb7', light: '#93c2e6' },
+        crosstrain: { dark: '#6f61c8', light: '#b0a8ea' },
+        custom: { dark: '#8a58cf', light: '#c7a6ef' },
+        day_off: { dark: '#607286', light: '#a9b3bd' },
+        other: { dark: '#7f55b2', light: '#bea5dd' },
+      };
+      return palette[key] || palette.other;
+    }
+
+    function weeklyDistanceLabel(meters, sportKey) {
+      const m = Number(meters || 0);
+      if (!(m > 0)) return '';
+      if (sportKey === 'rowing') return `${Math.round(m)} m`;
+      return fmtDistanceMetersInUnit(m, distanceUnit);
+    }
+
+    function splitMetricValueUnit(text) {
+      const raw = String(text || '').trim();
+      const match = raw.match(/^([+-]?\d+(?:\.\d+)?)\s*(.*)$/);
+      if (!match) return { value: raw, unit: '' };
+      const n = Number(match[1]);
+      let value = match[1];
+      if (Number.isFinite(n)) {
+        if (Math.abs(n) >= 100) value = String(Math.round(n));
+        else if (Math.abs(n - Math.round(n)) < 0.0001) value = String(Math.round(n));
+        else value = n.toFixed(1).replace(/\.0$/, '');
+      }
+      return { value, unit: String(match[2] || '').trim() };
+    }
+
     function getWeekMetrics(dateKeys, dayMap) {
-      let durationMin = 0;
+      let plannedDurationMin = 0;
+      let actualDurationMin = 0;
       let tss = 0;
+      let totalDistanceM = 0;
+      let totalWorkKj = 0;
+      let totalElevGainM = 0;
       let weekEnd = null;
+      let hasPowerTss = false;
+      const durationBySport = {};
+      const plannedBySport = {};
+      const distanceBySport = {};
+      const pairedPlanned = new Set((pairs || []).map((p) => String(p.planned_id)));
+      const pairedStrava = new Set((pairs || []).map((p) => String(p.strava_id)));
+
+      const addSportDuration = (bucket, key, mins) => {
+        const n = Number(mins || 0);
+        if (!(n > 0)) return;
+        bucket[key] = Number(bucket[key] || 0) + n;
+      };
+      const addSportDistance = (key, meters) => {
+        const m = Number(meters || 0);
+        if (!(m > 0)) return;
+        distanceBySport[key] = Number(distanceBySport[key] || 0) + m;
+      };
+      const addPlannedWorkout = (workout, fallbackType = 'other') => {
+        const sport = weeklySportKey(workout?.type || workout?.workout_type || fallbackType);
+        const dur = Number(workout?.duration_min || 0);
+        if (dur > 0) {
+          plannedDurationMin += dur;
+          addSportDuration(plannedBySport, sport, dur);
+        }
+      };
+      const addActualWorkout = (workout, fallbackType = 'other') => {
+        const sport = weeklySportKey(workout?.type || workout?.workout_type || fallbackType);
+        const dur = completedDurationMinValue(workout);
+        const dist = Number(workout?.distance || workout?.distance_m || 0);
+        const wk = Number(workout?.work_kj || workout?.completed_work_kj || 0);
+        const eg = Number(workout?.elev_gain_m || workout?.completed_elevation_m || workout?.elevation_m || 0);
+        actualDurationMin += dur;
+        tss += activityToTss(workout);
+        if (Number(workout?.avg_power || 0) > 0) hasPowerTss = true;
+        totalDistanceM += dist;
+        totalWorkKj += wk;
+        totalElevGainM += eg;
+        addSportDuration(durationBySport, sport, dur);
+        addSportDistance(sport, dist);
+      };
 
       dateKeys.forEach(key => {
         if (!key) return;
         weekEnd = key;
         const day = dayMap[key];
         if (!day) return;
-        durationMin += day.durationMin;
-        tss += day.tss;
+        (day.items || []).forEach((item) => {
+          if (item.kind !== 'workout') return;
+          addPlannedWorkout(item, item.workout_type || 'other');
+          if (!pairedPlanned.has(String(item.id))) {
+            const manual = completedFromPlanned(item);
+            if (manual) addActualWorkout(manual, item.workout_type || 'other');
+          }
+        });
+        (day.done || []).forEach((a) => {
+          if (!pairedStrava.has(String(a.id || ''))) {
+            addPlannedWorkout(a, a.type || 'other');
+          }
+          addActualWorkout(a, a.type || 'other');
+        });
       });
 
       const metrics = weekEnd ? buildMetricsToDate(weekEnd) : { ctl: 0, atl: 0, tsb: 0 };
+      const sports = new Set([...Object.keys(durationBySport), ...Object.keys(plannedBySport)]);
+      const sportRows = Array.from(sports)
+        .map((sportKey) => {
+          const planned = Number(plannedBySport[sportKey] || 0);
+          const actual = Number(durationBySport[sportKey] || 0);
+          return {
+            key: sportKey,
+            label: weeklySportLabel(sportKey),
+            plannedMin: planned,
+            actualMin: actual,
+            palette: weeklySportPalette(sportKey),
+            distanceMeters: Number(distanceBySport[sportKey] || 0),
+          };
+        })
+        .filter((r) => r.plannedMin > 0 || r.actualMin > 0)
+        .sort((a, b) => {
+          if (b.actualMin !== a.actualMin) return b.actualMin - a.actualMin;
+          return b.plannedMin - a.plannedMin;
+        });
       return {
-        durationLabel: formatDurationMin(durationMin),
+        plannedDurationMin,
+        actualDurationMin,
+        plannedDurationLabel: formatDurationMin(plannedDurationMin),
+        actualDurationLabel: formatDurationMin(actualDurationMin),
         tss: Math.round(tss),
+        totalDistanceM,
+        totalWorkKj: Math.round(totalWorkKj),
+        totalElevGainM,
+        hasCompletedActual: actualDurationMin > 0 || tss > 0 || totalDistanceM > 0 || totalWorkKj > 0 || totalElevGainM > 0,
+        hasPowerTss,
+        sportRows,
         ctl: metrics.ctl,
         atl: metrics.atl,
         tsb: metrics.tsb,
@@ -1851,6 +2300,7 @@
     function hasUnsavedWorkoutChanges() {
       if (!window.currentWorkoutPayload || !modalDraft) return false;
       if (analyzeState && analyzeState.pendingDirty) return true;
+      if (!modalDraft.userTouched) return false;
       const start = modalDraft.initialSnapshot;
       if (!start) return false;
       const now = workoutDraftSnapshot();
@@ -1870,6 +2320,17 @@
       if (modal) modal.classList.toggle('analyze-mode', showAnalyze);
       document.getElementById('wvFilesPopover').classList.add('hidden');
       document.getElementById('wvFilesTabBtn').classList.remove('active');
+      if (showAnalyze && analyzeState && analyzeState._map) {
+        requestAnimationFrame(() => {
+          analyzeState._map.invalidateSize();
+          if (analyzeState._mapPolyline) {
+            analyzeState._map.fitBounds(analyzeState._mapPolyline.getBounds(), { padding: [18, 18] });
+          }
+        });
+      }
+      if (!showAnalyze) {
+        requestAnimationFrame(() => autoSizeWorkoutDescription());
+      }
     }
 
     function syncUnitSelectValue(selectId, desired, allowed) {
@@ -1948,6 +2409,7 @@
         undoBtn.onclick = () => {
           if (!modalDraft) return;
           modalDraft.pendingDeleteFit = false;
+          modalDraft.userTouched = true;
           renderWorkoutFiles(payload);
         };
       }
@@ -1971,6 +2433,7 @@
           if (!modalDraft) return;
           confirmDelete({ onConfirm: () => {
             modalDraft.pendingDeleteFit = true;
+            modalDraft.userTouched = true;
             renderWorkoutFiles(window.currentWorkoutPayload);
           } });
         };
@@ -1984,6 +2447,7 @@
       const parentPlanned = payload.planned || null;
       modalDraft = {
         isNewWorkout: !!payload.isDraft,
+        userTouched: false,
         pendingDeleteFit: false,
         uploadedNow: false,
         createdActivityId: null,
@@ -2003,7 +2467,7 @@
           if_value: data.if_value || null,
           tss_override: data.tss_override || null,
         } : null,
-        commentsFeed: commentsArrayFromEntity(parentPlanned || data),
+        commentsFeed: commentsArrayFromEntity(payload.source === 'strava' ? data : (parentPlanned || data)),
         sportType: canonicalWorkoutType(
           parentPlanned
             ? (parentPlanned.workout_type || 'Other')
@@ -2018,11 +2482,16 @@
       const dateKey = parentPlanned ? parentPlanned.date : payload.source === 'strava' ? dateKeyFromDate(new Date(data.start_date_local)) : data.date;
       const metrics = buildMetricsToDate(dateKey || todayKey());
       const dateText = parseDateKey(dateKey || todayKey()).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).toUpperCase();
+      const dateLabel = parentPlanned
+        ? `${parentPlanned.date} (Planned Day)`
+        : payload.source === 'strava'
+          ? new Date(data.start_date_local || new Date()).toLocaleString()
+          : `${data.date || todayKey()} (Planned)`;
       document.getElementById('wvDateLine').textContent = dateText;
       document.getElementById('wvHeadCtl').textContent = `Fitness ${metrics.ctl}`;
       document.getElementById('wvHeadAtl').textContent = `Fatigue ${metrics.atl}`;
       document.getElementById('wvHeadTsb').textContent = `Form ${metrics.tsb > 0 ? '+' + metrics.tsb : metrics.tsb}`;
-      document.getElementById('wvTimeSelect').innerHTML = `<option>${payload.source === 'strava' ? formatStartClock(data.start_date_local) : '8:00 am'}</option>`;
+      setWorkoutTimeInput(payload);
       document.getElementById('wvTitle').value = parentPlanned ? (parentPlanned.title || 'Workout') : (data.title || data.name || 'Workout');
       const subNode = document.getElementById('wvSub');
       if (subNode) subNode.textContent = `${typeLabel} • ${dateLabel}`;
@@ -2045,6 +2514,7 @@
       sportMenu.querySelectorAll('.wv-sport-item').forEach((btn) => {
         btn.addEventListener('click', () => {
           if (!modalDraft) return;
+          modalDraft.userTouched = true;
           modalDraft.sportType = btn.dataset.sport || 'Other';
           document.getElementById('wvSportIcon').innerHTML = toSportIcon(modalDraft.sportType);
           document.getElementById('wvSportName').textContent = modalDraft.sportType;
@@ -2075,6 +2545,7 @@
       applyModalHeaderTint(payload);
       modalDraft.initialSnapshot = workoutDraftSnapshot();
       document.getElementById('workoutViewModal').classList.add('open');
+      requestAnimationFrame(() => autoSizeWorkoutDescription());
     }
 
     async function closeWorkoutModal(discard = true) {
@@ -2109,6 +2580,7 @@
       document.getElementById('workoutViewModal').classList.remove('open');
       document.getElementById('workoutViewModal').classList.remove('analyze-mode');
       modalDraft = null;
+      destroyAnalyzeMap();
       analyzeState = null;
       window.currentWorkoutPayload = null;
       fitUploadContext = 'global';
@@ -2130,8 +2602,10 @@
       const data = payload.data || {};
       const targetPlanned = payload.planned || (payload.source === 'planned' ? data : null);
       const description = document.getElementById('wvDescription').value;
+      const selectedTimeHHMM = normalizeTimeHHMM(document.getElementById('wvTimeSelect')?.value || '') || inferWorkoutTimeHHMM(payload);
       const commentsFeed = modalDraft ? modalDraft.commentsFeed.slice() : [];
-      const comments = commentsFeed.length ? commentsFeed[commentsFeed.length - 1] : '';
+      const lastComment = commentsFeed.length ? normalizeCommentEntry(commentsFeed[commentsFeed.length - 1]) : null;
+      const comments = lastComment ? String(lastComment.text || '').trim() : '';
       const sport = (modalDraft && modalDraft.sportType) || 'Other';
       const sportProfile = workoutSummaryProfile(sport);
       const distanceUnitLocal = document.getElementById('pcDistanceUnit').value || 'km';
@@ -2191,7 +2665,7 @@
         || completedTss > 0
         || completedIf > 0;
       const rpeVal = Number(document.getElementById('wvRpe').value || 0);
-      const feel = hasCompleted ? currentFeel : 0;
+      const feel = hasCompleted ? encodeStoredFeelValue(currentFeel) : 0;
       const rpeOut = (hasCompleted && modalDraft && modalDraft.rpeTouched) ? rpeVal : 0;
       const isNewDraft = !!(modalDraft && modalDraft.isNewWorkout);
 
@@ -2210,7 +2684,8 @@
         const plannedCommentsFeed = keepPlannedSide
           ? commentsArrayFromEntity(targetPlanned)
           : commentsFeed;
-        const plannedComments = plannedCommentsFeed.length ? plannedCommentsFeed[plannedCommentsFeed.length - 1] : '';
+        const plannedLastComment = plannedCommentsFeed.length ? normalizeCommentEntry(plannedCommentsFeed[plannedCommentsFeed.length - 1]) : null;
+        const plannedComments = plannedLastComment ? String(plannedLastComment.text || '').trim() : '';
         const plannedFeel = keepPlannedSide ? Number(targetPlanned.feel || 0) : feel;
         const plannedRpe = keepPlannedSide ? Number(targetPlanned.rpe || 0) : rpeOut;
         await fetch(`/calendar-items/${targetPlanned.id}`, {
@@ -2236,6 +2711,7 @@
             comments_feed: plannedCommentsFeed,
             feel: plannedFeel,
             rpe: plannedRpe,
+            start_time: selectedTimeHHMM,
             completed_duration_min: completedDuration,
             completed_distance_km: completedDistanceM / 1000,
             completed_distance_m: completedDistanceM,
@@ -2255,6 +2731,7 @@
           }),
         });
         if (payload.source === 'strava' && data && data.id) {
+          const activityDateKey = dateKeyFromDate(new Date(data.start_date_local || new Date()));
           await fetch(`/activities/${data.id}/meta`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -2263,6 +2740,7 @@
               comments_feed: commentsFeed,
               feel,
               rpe: rpeOut,
+              start_date_local: combineDateAndTimeIso(activityDateKey, selectedTimeHHMM, data.start_date_local),
               if_value: completedIf,
               tss_override: completedTss,
               tss_source: (modalDraft && modalDraft.tssSource) || '',
@@ -2294,6 +2772,7 @@
             comments_feed: commentsFeed,
             feel,
             rpe: rpeOut,
+            start_time: selectedTimeHHMM,
             completed_duration_min: completedDuration,
             completed_distance_km: completedDistanceM / 1000,
             completed_distance_m: completedDistanceM,
@@ -2328,6 +2807,11 @@
             comments_feed: commentsFeed,
             feel,
             rpe: rpeOut,
+            start_date_local: combineDateAndTimeIso(
+              dateKeyFromDate(new Date(data.start_date_local || new Date())),
+              selectedTimeHHMM,
+              data.start_date_local
+            ),
             if_value: completedIf,
             tss_override: completedTss,
             tss_source: (modalDraft && modalDraft.tssSource) || '',
@@ -2355,6 +2839,7 @@
       if (result && result.saved && modalDraft) {
         modalDraft.pendingDeleteFit = false;
         modalDraft.uploadedNow = false;
+        modalDraft.userTouched = false;
         modalDraft.initialSnapshot = workoutDraftSnapshot();
       }
     }
@@ -2469,17 +2954,22 @@
 
       document.getElementById('wvSummaryText').textContent = '';
       document.getElementById('wvDescription').value = (parentPlanned && parentPlanned.description) || data.description || '';
+      autoSizeWorkoutDescription();
       if (modalDraft) {
         if (!Array.isArray(modalDraft.commentsFeed) || !modalDraft.commentsFeed.length) {
-          modalDraft.commentsFeed = commentsArrayFromEntity(parentPlanned || data);
+          modalDraft.commentsFeed = commentsArrayFromEntity(payload.source === 'strava' ? data : (parentPlanned || data));
         }
         renderCommentsFeed();
       }
-      const savedRpe = Number((parentPlanned && parentPlanned.rpe) || data.rpe || 0);
+      const savedRpe = payload.source === 'strava'
+        ? Math.max(0, Math.min(10, Number(data.rpe || 0)))
+        : Math.max(0, Math.min(10, nonZeroNumber(data.rpe, parentPlanned ? parentPlanned.rpe : 0)));
       if (modalDraft) modalDraft.rpeTouched = savedRpe > 0;
       document.getElementById('wvRpe').value = String(savedRpe > 0 ? savedRpe : 1);
       document.getElementById('wvRpe').classList.toggle('rpe-unset', !(modalDraft && modalDraft.rpeTouched));
-      const savedFeel = (parentPlanned && parentPlanned.feel) || data.feel || 0;
+      const savedFeel = payload.source === 'strava'
+        ? decodeStoredFeelValue(Number(data.feel || 0))
+        : decodeStoredFeelValue(nonZeroNumber(data.feel, parentPlanned ? parentPlanned.feel : 0));
       setFeelValue(savedFeel);
       renderTopFeelRpe(savedFeel, savedRpe);
 
@@ -2524,10 +3014,13 @@
         : (activeTssSource === 'hr' ? (hrTssValue || powerTssValue) : (powerTssValue || hrTssValue));
       if (!completedTss) completedTss = null;
 
+      const hasActualPower = Number(data.avg_power || 0) > 0;
+      const showTssDropdown = hasBothTss && hasActualPower;
+      const tssStaticLabel = hasActualPower ? 'TSS' : 'hrTSS';
       const tssUnitLabel = document.getElementById('pcTssUnitLabel');
       const tssCompUnit = document.getElementById('pcTssCompUnit');
       if (tssCompUnit) {
-        tssCompUnit.style.display = hasBothTss ? '' : 'none';
+        tssCompUnit.style.display = showTssDropdown ? '' : 'none';
         tssCompUnit.value = activeTssSource === 'hr' ? 'hr' : 'power';
         tssCompUnit.onchange = () => {
           activeTssSource = tssCompUnit.value === 'hr' ? 'hr' : 'power';
@@ -2537,7 +3030,10 @@
           if (modalDraft) modalDraft.tssSource = activeTssSource;
         };
       }
-      if (tssUnitLabel) tssUnitLabel.style.display = hasBothTss ? 'none' : '';
+      if (tssUnitLabel) {
+        tssUnitLabel.style.display = showTssDropdown ? 'none' : '';
+        tssUnitLabel.textContent = tssStaticLabel;
+      }
       if (modalDraft) modalDraft.tssSource = activeTssSource;
       const completedWorkKj = parentPlanned
         ? Number((plannedObj.completed_work_kj ?? data.work_kj ?? 0) || 0)
@@ -2913,16 +3409,110 @@
       recalcDerivedLive();
     }
 
+    function destroyAnalyzeMap() {
+      if (analyzeState && analyzeState._map) {
+        analyzeState._map.remove();
+        analyzeState._map = null;
+        analyzeState._mapCursorMarker = null;
+      }
+      const container = document.getElementById('wvMapPlaceholder');
+      if (container) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+      }
+    }
+
+    function initAnalyzeMap(pts, laps, fit) {
+      const container = document.getElementById('wvMapPlaceholder');
+      if (!container) return;
+
+      destroyAnalyzeMap();
+
+      if (!fit.has_gps) {
+        container.classList.add('hidden');
+        return;
+      }
+
+      const gpsPts = pts.filter((p) => p.lat != null && p.lng != null);
+      if (gpsPts.length < 2) {
+        container.classList.add('hidden');
+        return;
+      }
+
+      container.classList.remove('hidden');
+
+      const map = L.map(container, { zoomControl: false });
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 20,
+      }).addTo(map);
+
+      L.control.zoom({ position: 'topleft' }).addTo(map);
+
+      const latLngs = gpsPts.map((p) => [p.lat, p.lng]);
+      const polyline = L.polyline(latLngs, { color: '#1a3f6f', weight: 3, opacity: 0.9 }).addTo(map);
+
+      const lapHighlightLayer = L.polyline([], { color: '#6aaee8', weight: 4, opacity: 1 }).addTo(map);
+
+      laps.forEach((lap, i) => {
+        if (!lap.start) return;
+        const lapMs = new Date(lap.start).getTime();
+        const lapPt = gpsPts.reduce((best, p) => {
+          const d = Math.abs(new Date(p.timestamp).getTime() - lapMs);
+          const bd = Math.abs(new Date(best.timestamp).getTime() - lapMs);
+          return d < bd ? p : best;
+        }, gpsPts[0]);
+        if (!lapPt) return;
+        const icon = L.divIcon({
+          className: 'lap-map-icon',
+          html: `<div class="lap-map-label">${i + 1}</div>`,
+          iconSize: [20, 20],
+          iconAnchor: [10, 10],
+        });
+        L.marker([lapPt.lat, lapPt.lng], { icon, interactive: false }).addTo(map);
+      });
+
+      const pinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="24" viewBox="0 0 18 24">
+        <path d="M9 0C4.03 0 0 4.03 0 9c0 6.75 9 15 9 15s9-8.25 9-15c0-4.97-4.03-9-9-9z" fill="#1a3f6f" stroke="white" stroke-width="1.5"/>
+        <circle cx="9" cy="9" r="3.5" fill="white"/>
+      </svg>`;
+      const cursorIcon = L.divIcon({
+        className: 'map-cursor-icon',
+        html: pinSvg,
+        iconSize: [18, 24],
+        iconAnchor: [9, 24],
+      });
+      const cursorMarker = L.marker(latLngs[0], { icon: cursorIcon, zIndexOffset: 1000, interactive: false }).addTo(map);
+      const el = cursorMarker.getElement();
+      if (el) el.style.display = 'none';
+
+      if (analyzeState) {
+        analyzeState._map = map;
+        analyzeState._mapCursorMarker = cursorMarker;
+        analyzeState._mapPolyline = polyline;
+        analyzeState._mapLapHighlight = lapHighlightLayer;
+        analyzeState._mapGpsPts = gpsPts;
+      }
+
+      setTimeout(() => {
+        map.invalidateSize();
+        map.fitBounds(polyline.getBounds(), { padding: [18, 18] });
+      }, 150);
+    }
+
     async function renderWorkoutAnalyze(payload, modalSession = workoutModalSession) {
       if (modalSession !== workoutModalSession) return;
       const data = payload.data || {};
       const chart = document.getElementById('wvChart');
       const lapBody = document.querySelector('#wvLapTable tbody');
       const statsNode = document.getElementById('wvSelectionKv');
+      const mapPlaceholderEarly = document.getElementById('wvMapPlaceholder');
       if (!data.fit_id) {
         statsNode.innerHTML = '<div>No FIT stream for this workout.</div>';
         lapBody.innerHTML = '';
         chart.innerHTML = '';
+        if (mapPlaceholderEarly) mapPlaceholderEarly.classList.add('hidden');
         return;
       }
 
@@ -2931,6 +3521,7 @@
         statsNode.innerHTML = '<div>Could not load FIT data.</div>';
         lapBody.innerHTML = '';
         chart.innerHTML = '';
+        if (mapPlaceholderEarly) mapPlaceholderEarly.classList.add('hidden');
         return;
       }
       const fit = await resp.json();
@@ -2938,6 +3529,8 @@
       const series = Array.isArray(fit.series) ? fit.series : [];
       const laps = Array.isArray(fit.laps) ? fit.laps : [];
       const summary = fit.summary || {};
+      const mapPlaceholder = document.getElementById('wvMapPlaceholder');
+      if (mapPlaceholder) mapPlaceholder.classList.toggle('hidden', !fit.has_gps);
       if (!series.length) {
         statsNode.innerHTML = '<div>No FIT points available.</div>';
         lapBody.innerHTML = '';
@@ -2954,6 +3547,8 @@
         distance: num(p.distance),
         cadence: num(p.cadence),
         power: num(p.power),
+        lat: p.lat != null ? Number(p.lat) : null,
+        lng: p.lng != null ? Number(p.lng) : null,
       }));
       const totalSec = Math.max(1, pts[pts.length - 1].t - pts[0].t);
 
@@ -2987,7 +3582,14 @@
         pendingCuts: [],
         startTrim: 0,
         selectedLapKeys: new Set(),
+        _map: null,
+        _mapCursorMarker: null,
+        _mapPolyline: null,
+        _mapLapHighlight: null,
+        _mapGpsPts: null,
       };
+
+      initAnalyzeMap(pts, laps, fit);
 
       const w = 1200;
       const h = 180;
@@ -3608,12 +4210,21 @@
         analyzeState.cursorSvgX = -1;
         const tooltip = document.getElementById('wvCursorTooltip');
         tooltip.classList.add('hidden');
+        if (analyzeState._mapCursorMarker) {
+          const el = analyzeState._mapCursorMarker.getElement();
+          if (el) el.style.display = 'none';
+        }
       }
 
       function updateCursor(ev) {
         const { time, svgX } = plotMouseToTime(ev);
         analyzeState.cursorSvgX = svgX;
         const nearest = findNearestPointAt(time);
+        if (analyzeState._mapCursorMarker && nearest && nearest.lat != null && nearest.lng != null) {
+          analyzeState._mapCursorMarker.setLatLng([nearest.lat, nearest.lng]);
+          const el = analyzeState._mapCursorMarker.getElement();
+          if (el) el.style.display = '';
+        }
         const tooltip = document.getElementById('wvCursorTooltip');
         let html = `<strong>Time:</strong> ${hms(time)}`;
         if (nearest.cadence != null) html += `<br/><strong>RPM:</strong> ${Math.round(nearest.cadence)} rpm`;
@@ -3820,6 +4431,19 @@
         } else {
           analyzeState.selection = null;
           analyzeState.selectionMode = 'laps';
+        }
+        if (analyzeState._mapLapHighlight && analyzeState._mapGpsPts) {
+          const baseMs = new Date(pts[0].timestamp).getTime();
+          const ranges = analyzeState.lapHighlightRanges;
+          if (ranges.length) {
+            const segPts = analyzeState._mapGpsPts.filter((p) => {
+              const sec = (new Date(p.timestamp).getTime() - baseMs) / 1000;
+              return ranges.some((r) => sec >= r.startSec && sec <= r.endSec);
+            });
+            analyzeState._mapLapHighlight.setLatLngs(segPts.map((p) => [p.lat, p.lng]));
+          } else {
+            analyzeState._mapLapHighlight.setLatLngs([]);
+          }
         }
         renderMain();
       }
@@ -4324,12 +4948,15 @@
 
     function homeWorkoutFeedbackMarkup(primary, secondary = null) {
       const entities = [primary, secondary].filter(Boolean);
-      let emoji = '';
+      let feel = 0;
       let rpe = 0;
       let comments = 0;
       entities.forEach((entity) => {
         if (!entity) return;
-        if (!emoji) emoji = feelEmoji(entity.feel);
+        if (!feel) {
+          const fv = Number(entity.feel || 0);
+          if (fv > 0) feel = fv;
+        }
         if (!rpe) {
           const rv = Number(entity.rpe || 0);
           if (rv > 0) rpe = rv;
@@ -4337,8 +4964,8 @@
         comments = Math.max(comments, commentCount(entity));
       });
       const parts = [];
-      const feedbackBits = [emoji, rpe > 0 ? String(rpe) : ''].filter(Boolean).join(' ');
-      if (feedbackBits) parts.push(`<span>${feedbackBits}</span>`);
+      const feedbackBits = feelRpeMarkup(feel, rpe, 'sm');
+      if (feedbackBits) parts.push(feedbackBits);
       parts.push(`<span>💬${comments > 0 ? ` x${comments}` : ''}</span>`);
       return `<div class="today-card-foot"><span class="today-card-feedback">${parts.join(' ')}</span></div>`;
     }
@@ -4398,7 +5025,9 @@
       if (todayActions) todayActions.innerHTML = '';
 
       const metricsItems = calendarItems.filter(i => i.kind === 'metrics' && i.date === today);
-      const doneToday = activities.filter(a => dateKeyFromDate(new Date(a.start_date_local)) === today);
+      const doneToday = activities
+        .filter(a => dateKeyFromDate(new Date(a.start_date_local)) === today)
+        .sort((a, b) => new Date(a.start_date_local).getTime() - new Date(b.start_date_local).getTime());
       const plannedToday = calendarItems.filter(i => i.kind === 'workout' && i.date === today)
         .sort((a, b) => (a.date > b.date ? 1 : -1));
 
@@ -4663,6 +5292,17 @@
             }
           });
 
+          cardsToShow.sort((a, b) => {
+            const aPriority = a.kind === 'goal-group' ? -10 : (a.kind === 'other' ? -5 : 0);
+            const bPriority = b.kind === 'goal-group' ? -10 : (b.kind === 'other' ? -5 : 0);
+            if (aPriority !== bPriority) return aPriority - bPriority;
+            const aTime = parseWorkoutStartMs(a);
+            const bTime = parseWorkoutStartMs(b);
+            if (aTime !== bTime) return aTime - bTime;
+            if (a.kind !== b.kind) return String(a.kind).localeCompare(String(b.kind));
+            return 0;
+          });
+
           cardsToShow.slice(0, 6).forEach((entry) => {
             if (entry.kind === 'goal-group') {
               const items = entry.items;
@@ -4768,12 +5408,12 @@
               const cTime = completed ? formatStartClock(completed.start_date_local) : '';
               const arrow = comp.arrow === 'up' ? '<span class="delta-up">↑</span>' : comp.arrow === 'down' ? '<span class="delta-down">↓</span>' : '';
               const feedCount = commentCount(item) || commentCount(completed);
-              const feedback = `${feelEmoji(item.feel)} ${Number(item.rpe || 0) > 0 ? item.rpe : ''}`.trim();
+              const feedback = feelRpeMarkup(nonZeroNumber(completed ? completed.feel : 0, item.feel), nonZeroNumber(completed ? completed.rpe : 0, item.rpe), 'sm');
               const commentsText = feedCount > 0 ? `💬 x${feedCount}` : '💬';
               const metricParts = [];
               if (durMin > 0) metricParts.push(`<strong>${formatDurationClockCompact(durMin)}</strong>`);
               if (distM > 0) metricParts.push(`<strong>${fmtDistanceMetersInUnit(distM, unitForCard)}</strong>`);
-              if (tssVal > 0) metricParts.push(`<strong>${tssVal} TSS</strong>`);
+              if (tssVal > 0) metricParts.push(`<strong>${tssVal} ${Number(completed && completed.avg_power || 0) > 0 ? 'TSS' : 'hrTSS'}</strong>`);
               card.innerHTML = `<button class="card-menu-btn" type="button">&#8942;</button>${cardIcon(item.workout_type)}<p class="wc-title"><span>${item.title || (item.workout_type || 'Workout')}</span></p>${metricParts.length ? `<p class="wc-metrics">${metricParts.join('')}</p>` : ''}${cTime ? `<p class="wc-meta">C: ${cTime} ${arrow}</p>` : ''}<div class="wc-bottom"><span>${feedback || '&nbsp;'}</span><span>${commentsText}</span></div>`;
               card.draggable = true;
               card.dataset.kind = 'planned';
@@ -4858,7 +5498,7 @@
             const card = document.createElement('div');
             card.className = `work-card ${compStat}`;
             const feedCount = commentCount(a);
-            const feedback = `${feelEmoji(a.feel)} ${Number(a.rpe || 0) > 0 ? a.rpe : ''}`.trim();
+            const feedback = feelRpeMarkup(a.feel, a.rpe, 'sm');
             const commentsText = feedCount > 0 ? `💬 x${feedCount}` : '💬';
             const cDur = completedDurationMinValue(a);
             const cDist = Number(a.distance || 0);
@@ -4866,7 +5506,7 @@
             const metricParts = [];
             if (cDur > 0) metricParts.push(`<strong>${formatDurationClockCompact(cDur)}</strong>`);
             if (cDist > 0) metricParts.push(`<strong>${fmtDistanceMetersInUnit(cDist, unitForCard)}</strong>`);
-            if (cTss > 0) metricParts.push(`<strong>${cTss} TSS</strong>`);
+            if (cTss > 0) metricParts.push(`<strong>${cTss} ${Number(a.avg_power || 0) > 0 ? 'TSS' : 'hrTSS'}</strong>`);
             card.innerHTML = `<button class="card-menu-btn" type="button">&#8942;</button>${cardIcon(a.type)}<p class="wc-title"><span>${a.name || 'Completed Workout'}</span></p>${metricParts.length ? `<p class="wc-metrics">${metricParts.join('')}</p>` : ''}<p class="wc-meta">C: ${formatStartClock(a.start_date_local)}</p><div class="wc-bottom"><span>${feedback || '&nbsp;'}</span><span>${commentsText}</span></div>`;
             card.draggable = true;
             card.dataset.kind = 'strava';
@@ -4932,9 +5572,86 @@
         }
 
         const week = getWeekMetrics(weekDateKeys, dayMap);
+        const renderDurationBar = (label, plannedMin, actualMin, palette, extraClass = '') => {
+          const planned = Math.max(0, Number(plannedMin || 0));
+          const actual = Math.max(0, Number(actualMin || 0));
+          const maxBase = Math.max(planned, actual, 1);
+          const plannedPct = Math.min(100, (planned / maxBase) * 100);
+          const doneWithinPlan = Math.min(actual, planned || actual);
+          const donePct = Math.min(100, (doneWithinPlan / maxBase) * 100);
+          const extraPct = actual > planned ? Math.min(100 - donePct, ((actual - planned) / maxBase) * 100) : 0;
+          const plannedLabel = formatDurationMin(planned);
+          const actualLabel = formatDurationMin(actual);
+          return `
+            <div class="ws-duration-row ${extraClass}">
+              <div class="ws-duration-head">
+                <span class="ws-duration-title">${label}</span>
+                <span class="ws-duration-values"><span>${plannedLabel}</span><strong>${actualLabel}</strong></span>
+              </div>
+              <div class="ws-duration-track">
+                <div class="ws-duration-planned" style="width:${plannedPct.toFixed(2)}%;"></div>
+                <div class="ws-duration-done" style="width:${donePct.toFixed(2)}%; background:${palette.dark};"></div>
+                ${extraPct > 0 ? `<div class="ws-duration-extra" style="left:${donePct.toFixed(2)}%; width:${extraPct.toFixed(2)}%; background:${palette.light};"></div>` : ''}
+              </div>
+            </div>
+          `;
+        };
+        const totalRowHtml = renderDurationBar(
+          'Total Duration',
+          week.plannedDurationMin,
+          week.actualDurationMin,
+          weeklySportPalette('total'),
+          'total'
+        );
+        const sportRowsHtml = week.sportRows
+          .map((rowMetric) => renderDurationBar(
+            rowMetric.label,
+            rowMetric.plannedMin,
+            rowMetric.actualMin,
+            rowMetric.palette
+          ))
+          .join('');
+        const renderMetricLine = (label, value, unit = '', classes = '') => `
+          <div class="ws-week-line ${classes}">
+            <span class="ws-metric-label">${label}</span>
+            <span class="ws-metric-number">${value}</span>
+            ${unit ? `<span class="ws-metric-unit">${unit}</span>` : ''}
+          </div>
+        `;
+        const distanceLines = week.sportRows
+          .slice()
+          .sort((a, b) => Number(b.distanceMeters || 0) - Number(a.distanceMeters || 0))
+          .map((rowMetric) => {
+            const distParts = splitMetricValueUnit(weeklyDistanceLabel(rowMetric.distanceMeters, rowMetric.key));
+            if (!distParts.value) return '';
+            const baseName = rowMetric.label.replace(/\s+Duration$/i, '');
+            return renderMetricLine(baseName, distParts.value, distParts.unit, 'ws-week-line-sports');
+          })
+          .filter(Boolean)
+          .join('');
+        const weekDistanceLabel = fmtDistanceMetersInUnit(week.totalDistanceM, distanceUnit);
+        const weekElevLabel = fmtElevation(week.totalElevGainM);
+        const distanceParts = splitMetricValueUnit(weekDistanceLabel);
+        const elevationParts = splitMetricValueUnit(weekElevLabel);
         const weekCard = document.createElement('div');
         weekCard.className = 'week-summary';
-        weekCard.innerHTML = `<div class="ws-metrics"><div class="ws-label-row"><span class="ws-ctl">Fitness</span><span class="ws-atl">Fatigue</span><span class="ws-tsb">Form</span></div><div class="ws-value-row"><span class="ws-ctl">${week.ctl} CTL</span><span class="ws-atl">${week.atl} ATL</span><span class="ws-tsb">${week.tsb > 0 ? '+' + week.tsb : week.tsb} TSB</span></div></div><div class="ws-row"><span>Total Duration</span><strong>${week.durationLabel}</strong></div><div class="ws-row"><span>Total TSS</span><strong>${week.tss}</strong></div>`;
+        weekCard.innerHTML = `
+          <div class="ws-metrics">
+            <div class="ws-label-row"><span class="ws-ctl">Fitness</span><span class="ws-atl">Fatigue</span><span class="ws-tsb">Form</span></div>
+            <div class="ws-value-row"><span class="ws-ctl">${week.ctl} CTL</span><span class="ws-atl">${week.atl} ATL</span><span class="ws-tsb">${week.tsb > 0 ? '+' + week.tsb : week.tsb} TSB</span></div>
+          </div>
+          <div class="ws-duration-block">
+            ${totalRowHtml}
+            ${sportRowsHtml}
+          </div>
+          <div class="ws-week-stats">
+            ${renderMetricLine('Distance', distanceParts.value, distanceParts.unit)}
+            ${renderMetricLine('TSS', String(week.tss), week.hasPowerTss ? 'TSS' : 'hrTSS')}
+            ${distanceLines}
+            ${week.hasCompletedActual ? renderMetricLine('Elevation Gain', elevationParts.value, elevationParts.unit) : ''}
+            ${week.hasCompletedActual ? renderMetricLine('Work', String(Math.max(0, Number(week.totalWorkKj || 0))), 'kJ') : ''}
+          </div>
+        `;
         row.appendChild(weekCard);
         grid.appendChild(row);
         weekRows.push(row);
@@ -5067,7 +5784,13 @@
       updateUnitButtons();
       renderHome();
       if (isCalendarActive()) {
-        renderCalendar({ preserveScroll: true });
+        if (!calendarState.hasRendered) {
+          const today = todayKey();
+          calendarState.anchorDate = today;
+          renderCalendar({ preserveScroll: false, anchorDate: today, jumpToDate: today });
+        } else {
+          renderCalendar({ preserveScroll: true });
+        }
       }
       renderDashboard();
       renderSettings();
@@ -5149,6 +5872,7 @@
           if (resp.ok) {
             const uploaded = await resp.json();
             modalDraft.uploadedNow = true;
+            modalDraft.userTouched = true;
             window.currentWorkoutPayload = { ...payload, data: uploaded };
             renderWorkoutSummary(window.currentWorkoutPayload);
             renderWorkoutFiles(window.currentWorkoutPayload);
@@ -5174,6 +5898,7 @@
             });
             const pair = pairResp.ok ? await pairResp.json() : null;
             modalDraft.uploadedNow = true;
+            modalDraft.userTouched = true;
             modalDraft.createdActivityId = uploaded.id;
             modalDraft.createdPairId = pair ? pair.id : null;
             window.currentWorkoutPayload = { source: 'strava', data: uploaded, planned: targetPlanned, pair };
@@ -5361,7 +6086,7 @@
         return;
       }
       if (!hasUnsavedWorkoutChanges()) {
-        await handleSaveAndClose();
+        await closeWorkoutModal(false);
         return;
       }
       const choice = await confirmUnsavedClose();
@@ -5418,27 +6143,59 @@
       ev.stopPropagation();
       document.getElementById('wvSportMenu').classList.toggle('hidden');
     });
+    const workoutModalRoot = document.getElementById('workoutViewModal');
+    workoutModalRoot.addEventListener('input', (ev) => {
+      if (!modalDraft) return;
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      if (t.id === 'wvCommentInput') return;
+      if (t.closest('#wvAnalyze')) return;
+      modalDraft.userTouched = true;
+      if (t.id === 'wvDescription') autoSizeWorkoutDescription();
+    });
+    workoutModalRoot.addEventListener('change', (ev) => {
+      if (!modalDraft) return;
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      if (t.closest('#wvAnalyze')) return;
+      modalDraft.userTouched = true;
+    });
     document.querySelectorAll('.feel-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         if (btn.disabled) return;
+        if (modalDraft) modalDraft.userTouched = true;
         setFeelValue(btn.dataset.feel);
         const rpeVal = Number(document.getElementById('wvRpe').value || 0);
         renderTopFeelRpe(btn.dataset.feel, (modalDraft && modalDraft.rpeTouched) ? rpeVal : 0);
       });
     });
     document.getElementById('wvRpe').addEventListener('input', () => {
+      if (modalDraft) modalDraft.userTouched = true;
       if (modalDraft) modalDraft.rpeTouched = true;
       const rpe = document.getElementById('wvRpe');
       rpe.classList.remove('rpe-unset');
       updateRpeLabel();
       renderTopFeelRpe(currentFeel, Number(rpe.value || 0));
     });
+    const workoutTimeInput = document.getElementById('wvTimeSelect');
+    if (workoutTimeInput) {
+      workoutTimeInput.addEventListener('change', () => {
+        const normalized = floorToQuarterHHMM(workoutTimeInput.value);
+        workoutTimeInput.value = normalized;
+        workoutTimeInput.title = timeLabelFromHHMM(normalized);
+      });
+    }
     document.getElementById('wvPostCommentBtn').addEventListener('click', () => {
       const input = document.getElementById('wvCommentInput');
       const txt = String(input.value || '').trim();
       if (!txt || !modalDraft) return;
       modalDraft.commentsFeed = modalDraft.commentsFeed || [];
-      modalDraft.commentsFeed.push(txt);
+      modalDraft.commentsFeed.push({
+        author: currentDisplayName(),
+        at: new Date().toISOString(),
+        text: txt,
+      });
+      modalDraft.userTouched = true;
       input.value = '';
       renderCommentsFeed();
     });
@@ -5452,6 +6209,7 @@
       const ok = await confirmDeleteComment();
       if (!ok) return;
       modalDraft.commentsFeed.splice(idx, 1);
+      modalDraft.userTouched = true;
       renderCommentsFeed();
     });
     document.getElementById('wvCommentsFeed').addEventListener('dblclick', (ev) => {
@@ -5470,8 +6228,18 @@
       input.focus();
       input.select();
       const commit = () => {
-        modalDraft.commentsFeed[idx] = String(input.value || '').trim();
-        modalDraft.commentsFeed = modalDraft.commentsFeed.filter(Boolean);
+        const prev = normalizeCommentEntry(modalDraft.commentsFeed[idx]) || { author: currentDisplayName(), at: new Date().toISOString(), text: '' };
+        const text = String(input.value || '').trim();
+        if (text) {
+          modalDraft.commentsFeed[idx] = {
+            author: prev.author || currentDisplayName(),
+            at: prev.at || new Date().toISOString(),
+            text,
+          };
+        } else {
+          modalDraft.commentsFeed.splice(idx, 1);
+        }
+        modalDraft.userTouched = true;
         renderCommentsFeed();
       };
       input.addEventListener('blur', commit, { once: true });
@@ -5657,5 +6425,9 @@
     bindWidgetToggles();
     applyWidgetPrefs();
     updateUnitButtons();
-    setView('home');
+    const initialView = (() => {
+      const saved = localStorage.getItem('activeView');
+      return saved && ['home', 'calendar', 'dashboard'].includes(saved) ? saved : 'home';
+    })();
+    setView(initialView, { suppressCalendarRender: initialView === 'calendar' });
     loadData();

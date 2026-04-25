@@ -6,6 +6,7 @@ import os
 import secrets
 import sqlite3
 import threading
+from functools import lru_cache
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,10 @@ SETTINGS_FILE = Path("data/settings.json")
 PLANNED_FILE = Path("data/planned_workouts.json")
 TEMPLATES_DIR = Path("app/templates")
 DB_PATH = Path("data/trainingfreaks.db")
+TP_EXPORT_WORKOUT_ROOTS = (
+    Path("tp_export/athlete_4211127/full_history/workouts"),
+    Path("tp_export/athlete_4211127/manual_test/workouts"),
+)
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 STRAVA_ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
 FILE_LOCK = threading.Lock()
@@ -673,6 +678,38 @@ def _as_float(v: Any) -> float | None:
         return None
 
 
+def _normalize_comments_feed(raw_feed: Any) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    if not isinstance(raw_feed, list):
+        return out
+    for entry in raw_feed:
+        if isinstance(entry, dict):
+            text = str(entry.get("text") or entry.get("comment") or entry.get("body") or "").strip()
+            if not text:
+                continue
+            author = str(
+                entry.get("author")
+                or entry.get("name")
+                or entry.get("commenterName")
+                or entry.get("user")
+                or "Athlete"
+            ).strip() or "Athlete"
+            at = str(
+                entry.get("at")
+                or entry.get("created_at")
+                or entry.get("dateCreated")
+                or entry.get("timestamp")
+                or ""
+            ).strip()
+            out.append({"author": author, "at": at, "text": text})
+            continue
+        text = str(entry or "").strip()
+        if not text:
+            continue
+        out.append({"author": "Athlete", "at": "", "text": text})
+    return out
+
+
 def _iso(v: Any) -> str | None:
     if isinstance(v, datetime):
         return v.isoformat()
@@ -680,6 +717,81 @@ def _iso(v: Any) -> str | None:
         return None
     text = str(v).strip()
     return text or None
+
+
+def _normalize_time_of_day(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    hhmm = text[:5]
+    if len(hhmm) == 5 and hhmm[2] == ":":
+        try:
+            h = int(hhmm[:2])
+            m = int(hhmm[3:5])
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                return f"{h:02d}:{m:02d}"
+        except (TypeError, ValueError):
+            pass
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return f"{dt.hour:02d}:{dt.minute:02d}"
+    except ValueError:
+        return ""
+
+
+@lru_cache(maxsize=8)
+def _tp_export_workout_file_index(filename: str) -> dict[str, Path]:
+    out: dict[str, Path] = {}
+    for root in TP_EXPORT_WORKOUT_ROOTS:
+        if not root.exists():
+            continue
+        for path in root.glob(f"*/{filename}"):
+            workout_id = path.parent.name.strip()
+            if workout_id and workout_id not in out:
+                out[workout_id] = path
+    return out
+
+
+def _tp_export_workout_file(workout_id: str, filename: str) -> Path | None:
+    return _tp_export_workout_file_index(filename).get(str(workout_id))
+
+
+@lru_cache(maxsize=1)
+def _tp_export_start_time_map() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for workout_id, path in _tp_export_workout_file_index("workout.json").items():
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        start_raw = str(raw.get("startTime") or "").strip()
+        if not start_raw:
+            continue
+        try:
+            dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+            out[workout_id] = dt.strftime("%H:%M:%S")
+        except ValueError:
+            continue
+    return out
+
+
+def _merge_tp_start_time(current_start: Any, workout_id: str) -> str | None:
+    tp_time = _tp_export_start_time_map().get(str(workout_id))
+    if not tp_time:
+        return _iso(current_start)
+
+    current_iso = _iso(current_start)
+    if not current_iso:
+        return None
+    try:
+        cur_dt = datetime.fromisoformat(current_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return current_iso
+
+    # Imported rows used 08:00 as a placeholder. Replace only placeholders.
+    if not ((cur_dt.hour == 8 and cur_dt.minute == 0 and cur_dt.second == 0) or (cur_dt.hour == 0 and cur_dt.minute == 0 and cur_dt.second == 0)):
+        return current_iso
+    return f"{cur_dt.date().isoformat()}T{tp_time}"
 
 
 def _mean(values: list[float]) -> float | None:
@@ -961,6 +1073,113 @@ def _tp_channel_value(values: list[Any], idx_map: dict[str, int], *names: str) -
     return None
 
 
+def _tp_export_laps_for_workout(workout_id: str, start_dt: datetime) -> list[dict[str, Any]]:
+    path = _tp_export_workout_file(str(workout_id), "detaildata.json")
+    if not path or not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    laps_stats = raw.get("lapsStats")
+    if not isinstance(laps_stats, list):
+        return []
+
+    laps: list[dict[str, Any]] = []
+    for idx, lap in enumerate(laps_stats):
+        if not isinstance(lap, dict):
+            continue
+        begin_ms = _as_float(lap.get("begin"))
+        end_ms = _as_float(lap.get("end"))
+        elapsed_ms = _as_float(lap.get("elapsedTime"))
+        if begin_ms is None:
+            begin_ms = 0.0
+        if end_ms is None and elapsed_ms is not None:
+            end_ms = begin_ms + elapsed_ms
+        if end_ms is None:
+            continue
+        start_iso = (start_dt + timedelta(milliseconds=max(0.0, begin_ms))).isoformat()
+        end_iso = (start_dt + timedelta(milliseconds=max(begin_ms, end_ms))).isoformat()
+        duration_s = max(0.0, (end_ms - begin_ms) / 1000.0)
+        laps.append(
+            {
+                "name": str(lap.get("name") or f"Lap {idx + 1}"),
+                "start": start_iso,
+                "end": end_iso,
+                "duration_s": duration_s if duration_s > 0 else None,
+                "distance_m": _as_float(lap.get("distance")),
+                "avg_hr": _as_float(lap.get("averageHeartRate")),
+                "max_hr": _as_float(lap.get("maxHeartRate")),
+                "avg_speed": _as_float(lap.get("averageSpeed")),
+                "max_speed": _as_float(lap.get("maxSpeed")),
+                "avg_power": _as_float(lap.get("averagePower")),
+                "max_power": _as_float(lap.get("maxPower")),
+                "normalized_power": _as_float(lap.get("normalizedPowerActual")),
+                "avg_cadence": _as_float(lap.get("averageCadence")),
+                "max_cadence": _as_float(lap.get("maxCadence")),
+                "moving_duration_s": duration_s if duration_s > 0 else None,
+                "work_kj": _as_float(lap.get("work")),
+                "calories": _as_float(lap.get("calories")),
+            }
+        )
+    return laps
+
+
+def _tp_export_start_dt(workout_id: str, fallback: datetime) -> datetime:
+    path = _tp_export_workout_file(str(workout_id), "workout.json")
+    if not path or not path.exists():
+        return fallback
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return fallback
+    start_raw = str(raw.get("startTime") or "").strip()
+    if not start_raw:
+        return fallback
+    try:
+        return datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+    except ValueError:
+        return fallback
+
+
+def _apply_tp_lap_timing(parsed: dict[str, Any], fit_id: str) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        return parsed
+    summary_raw = parsed.get("summary")
+    summary = summary_raw if isinstance(summary_raw, dict) else {}
+    fallback_start = datetime.utcnow()
+    start_raw = _iso(summary.get("start"))
+    if start_raw:
+        try:
+            fallback_start = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    start_dt = _tp_export_start_dt(fit_id, fallback_start)
+    tp_laps = _tp_export_laps_for_workout(fit_id, start_dt)
+    if not tp_laps:
+        return parsed
+
+    out = dict(parsed)
+    out["laps"] = tp_laps
+
+    s = dict(summary)
+    first_lap_start = tp_laps[0].get("start")
+    last_lap_end = tp_laps[-1].get("end")
+    if first_lap_start:
+        s["start"] = first_lap_start
+    if last_lap_end:
+        s["end"] = last_lap_end
+    total_lap_s = 0.0
+    for lap in tp_laps:
+        dur = _as_float((lap or {}).get("duration_s"))
+        if dur and dur > 0:
+            total_lap_s += dur
+    if total_lap_s > 0:
+        s["duration_s"] = total_lap_s
+    out["summary"] = s
+    return out
+
+
 def _build_fit_from_tp_stream(fit_id: str) -> dict[str, Any]:
     try:
         with get_db() as db:
@@ -1009,7 +1228,7 @@ def _build_fit_from_tp_stream(fit_id: str) -> dict[str, Any]:
     if not isinstance(samples, list) or not samples:
         raise HTTPException(status_code=404, detail="No TP stream samples found.")
 
-    start_raw = _iso(activity_row["start_date_local"]) or datetime.utcnow().isoformat()
+    start_raw = _merge_tp_start_time(_iso(activity_row["start_date_local"]) or datetime.utcnow().isoformat(), fit_id) or datetime.utcnow().isoformat()
     try:
         start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
     except ValueError:
@@ -1032,6 +1251,8 @@ def _build_fit_from_tp_stream(fit_id: str) -> dict[str, Any]:
         distance = _tp_channel_value(values, idx_map, "distance")
         cadence = _tp_channel_value(values, idx_map, "cadence")
         power = _tp_channel_value(values, idx_map, "power")
+        lat = _tp_channel_value(values, idx_map, "positionLat", "lat", "latitude")
+        lng = _tp_channel_value(values, idx_map, "positionLong", "positionLng", "lng", "longitude")
 
         if hr is not None:
             point["heart_rate"] = hr
@@ -1043,6 +1264,10 @@ def _build_fit_from_tp_stream(fit_id: str) -> dict[str, Any]:
             point["cadence"] = cadence
         if power is not None:
             point["power"] = power
+        if lat is not None:
+            point["lat"] = lat
+        if lng is not None:
+            point["lng"] = lng
 
         if len(point) > 1:
             points.append(point)
@@ -1089,24 +1314,27 @@ def _build_fit_from_tp_stream(fit_id: str) -> dict[str, Any]:
         "hr_tss": _as_float(activity_row["hr_tss"]),
         "normalized_power": _as_float(activity_row["np_value"]),
     }
-    laps = [
-        {
-            "name": "Lap 1",
-            "start": first_ts.isoformat(),
-            "end": last_ts.isoformat(),
-            "duration_s": duration_s,
-            "distance_m": distance_m,
-            "avg_hr": summary["avg_hr"],
-            "max_hr": summary["max_hr"],
-            "avg_speed": summary["avg_speed"],
-            "max_speed": summary["max_speed"],
-            "avg_power": summary["avg_power"],
-            "max_power": summary["max_power"],
-            "avg_cadence": summary["avg_cadence"],
-            "max_cadence": summary["max_cadence"],
-        }
-    ]
-    return {"summary": summary, "series": points, "laps": laps}
+    laps = _tp_export_laps_for_workout(fit_id, start_dt)
+    if not laps:
+        laps = [
+            {
+                "name": "Lap 1",
+                "start": first_ts.isoformat(),
+                "end": last_ts.isoformat(),
+                "duration_s": duration_s,
+                "distance_m": distance_m,
+                "avg_hr": summary["avg_hr"],
+                "max_hr": summary["max_hr"],
+                "avg_speed": summary["avg_speed"],
+                "max_speed": summary["max_speed"],
+                "avg_power": summary["avg_power"],
+                "max_power": summary["max_power"],
+                "avg_cadence": summary["avg_cadence"],
+                "max_cadence": summary["max_cadence"],
+            }
+        ]
+    has_gps = any(c in ("positionLat", "positionLong", "lat", "lng", "latitude", "longitude") for c in channel_set)
+    return {"summary": summary, "series": points, "laps": laps, "has_gps": has_gps}
 
 
 def load_fit_parsed(fit_id: str) -> dict[str, Any]:
@@ -1116,10 +1344,11 @@ def load_fit_parsed(fit_id: str) -> dict[str, Any]:
         ).fetchone()
     if row and row["fit_parsed_json"]:
         try:
-            return json.loads(row["fit_parsed_json"])
+            parsed = json.loads(row["fit_parsed_json"])
+            return _apply_tp_lap_timing(parsed, fit_id)
         except json.JSONDecodeError as err:
             raise HTTPException(status_code=500, detail="Corrupted FIT parsed data.") from err
-    return _build_fit_from_tp_stream(fit_id)
+    return _apply_tp_lap_timing(_build_fit_from_tp_stream(fit_id), fit_id)
 
 
 def demo_activities() -> list[dict[str, Any]]:
@@ -1168,6 +1397,9 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
 
     if kind == "workout":
         workout_type = str(payload.get("workout_type", "Other")).strip() or "Other"
+        start_time = _normalize_time_of_day(payload.get("start_time"))
+        if not start_time:
+            start_time = _normalize_time_of_day(payload.get("start_date_local"))
         try:
             duration = float(payload.get("duration_min", 0) or 0)
             distance = float(payload.get("distance_km", 0) or 0)
@@ -1199,13 +1431,14 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="Workout values must be numeric.") from err
 
         item["workout_type"] = workout_type
+        item["start_time"] = start_time
         item["duration_min"] = max(0.0, duration)
         item["distance_km"] = max(0.0, distance)
         item["distance_m"] = max(0.0, distance_m)
         item["elevation_m"] = max(0.0, elevation_m)
         d_unit = str(payload.get("distance_unit", "km"))
         e_unit = str(payload.get("elevation_unit", "m"))
-        item["distance_unit"] = d_unit if d_unit in {"km", "mi", "m"} else "km"
+        item["distance_unit"] = d_unit if d_unit in {"km", "mi", "m", "yd"} else "km"
         item["elevation_unit"] = e_unit if e_unit in {"m", "ft"} else "m"
         item["intensity"] = max(1.0, min(10.0, intensity))
         item["completed_duration_min"] = max(0.0, completed_duration)
@@ -1231,10 +1464,7 @@ def normalize_item(payload: dict[str, Any]) -> dict[str, Any]:
         item["planned_work_kj"] = max(0.0, planned_work_kj)
         item["comments"] = str(payload.get("comments", "")).strip()
         raw_feed = payload.get("comments_feed", [])
-        if isinstance(raw_feed, list):
-            item["comments_feed"] = [str(x).strip() for x in raw_feed if str(x).strip()]
-        else:
-            item["comments_feed"] = []
+        item["comments_feed"] = _normalize_comments_feed(raw_feed)
         feel = payload.get("feel")
         try:
             feel_val = int(feel) if feel is not None and str(feel).strip() else 0
@@ -1412,6 +1642,9 @@ def ui_activities() -> list[dict[str, Any]]:
         for k in override_fields:
             if k in override and override[k] is not None:
                 updated[k] = override[k]
+        merged_start = _merge_tp_start_time(updated.get("start_date_local"), rid)
+        if merged_start:
+            updated["start_date_local"] = merged_start
         out.append(updated)
     return out
 
@@ -1653,11 +1886,19 @@ def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) 
     if "comments_feed" in payload:
         raw_feed = payload.get("comments_feed")
         if isinstance(raw_feed, list):
-            updates["comments_feed"] = json.dumps([str(x).strip() for x in raw_feed if str(x).strip()])
+            updates["comments_feed"] = json.dumps(_normalize_comments_feed(raw_feed))
     if "title" in payload:
         updates["title"] = str(payload.get("title", "")).strip()
     if "type" in payload:
         updates["type"] = str(payload.get("type", "")).strip()
+    if "start_date_local" in payload:
+        raw_start = str(payload.get("start_date_local") or "").strip()
+        if raw_start:
+            try:
+                _ = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
+                updates["start_date_local"] = raw_start
+            except ValueError:
+                pass
     if "feel" in payload:
         try:
             updates["feel"] = max(0, min(5, int(payload.get("feel") or 0)))
@@ -1679,7 +1920,7 @@ def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) 
             updates[key] = _as_float(payload.get(key))
     if "distance_unit" in payload:
         unit = str(payload.get("distance_unit") or "").strip().lower()
-        if unit in {"km", "mi", "m"}:
+        if unit in {"km", "mi", "m", "yd"}:
             updates["distance_unit"] = unit
     if "elevation_unit" in payload:
         unit = str(payload.get("elevation_unit") or "").strip().lower()
@@ -1714,13 +1955,16 @@ def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) 
         ).fetchone()
 
         if is_fit:
-            set_clause = ", ".join(f"{k}=?" for k in updates)
+            activity_updates = dict(updates)
+            if "title" in activity_updates:
+                activity_updates["name"] = activity_updates.pop("title")
+            set_clause = ", ".join(f"{k}=?" for k in activity_updates)
             db.execute(
                 f"UPDATE activities SET {set_clause} WHERE id=?",
-                (*updates.values(), activity_id),
+                (*activity_updates.values(), activity_id),
             )
             # Keep override table aligned so stale pair overrides do not mask user edits.
-            if any(k in updates for k in ("type", "title")):
+            if any(k in updates for k in ("type", "title", "start_date_local")):
                 existing_override = db.execute(
                     "SELECT * FROM activity_overrides WHERE id = ?", (activity_id,)
                 ).fetchone()
@@ -1735,23 +1979,37 @@ def update_activity_meta(activity_id: str, payload: dict[str, Any] = Body(...)) 
                             "UPDATE activity_overrides SET title = ? WHERE id = ?",
                             (updates.get("title"), activity_id),
                         )
+                    if "start_date_local" in updates:
+                        date_part = str(updates.get("start_date_local") or "").split("T")[0].strip()
+                        if date_part:
+                            db.execute(
+                                "UPDATE activity_overrides SET date = ? WHERE id = ?",
+                                (date_part, activity_id),
+                            )
         else:
             # Strava/external activity — use overrides table
+            override_updates = dict(updates)
+            if "start_date_local" in override_updates:
+                date_part = str(override_updates.pop("start_date_local") or "").split("T")[0].strip()
+                if date_part:
+                    override_updates["date"] = date_part
+            if not override_updates:
+                return {"ok": True}
             existing = db.execute(
                 "SELECT * FROM activity_overrides WHERE id = ?", (activity_id,)
             ).fetchone()
             if existing:
-                set_clause = ", ".join(f"{k}=?" for k in updates)
+                set_clause = ", ".join(f"{k}=?" for k in override_updates)
                 db.execute(
                     f"UPDATE activity_overrides SET {set_clause} WHERE id=?",
-                    (*updates.values(), activity_id),
+                    (*override_updates.values(), activity_id),
                 )
             else:
-                cols = ["id"] + list(updates.keys())
+                cols = ["id"] + list(override_updates.keys())
                 placeholders = ", ".join("?" for _ in cols)
                 db.execute(
                     f"INSERT INTO activity_overrides ({', '.join(cols)}) VALUES ({placeholders})",
-                    (activity_id, *updates.values()),
+                    (activity_id, *override_updates.values()),
                 )
     return {"ok": True}
 
@@ -1990,6 +2248,7 @@ def get_planned_workouts() -> list[dict[str, Any]]:
         {
             "id": i.get("id"),
             "date": i.get("date"),
+            "start_time": i.get("start_time", ""),
             "workout_type": i.get("workout_type"),
             "title": i.get("title"),
             "planned_duration_min": i.get("duration_min", 0),
@@ -2016,6 +2275,7 @@ def create_planned_workout(payload: dict[str, Any] = Body(...)) -> dict[str, Any
     wrapped = {
         "kind": "workout",
         "date": payload.get("date"),
+        "start_time": payload.get("start_time", ""),
         "workout_type": payload.get("workout_type", "Other"),
         "title": payload.get("title", "Untitled Workout"),
         "duration_min": payload.get("planned_duration_min", 0),

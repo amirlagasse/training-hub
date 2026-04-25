@@ -6,14 +6,16 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260423b" />
+  <title>TrainingFreaks</title>
+  <link rel="icon" type="image/png" href="/icons/logos/logo.png" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260420g" />
+  <link rel="stylesheet" href="/static/css/leaflet.css" />
 </head>
 <body>
   <header class="top-nav">
     <div class="brand">
-      <img id="brandIcon" class="brand-icon" src="/icons/logos/logo.png" alt="Training Freaks logo" />
-      <img id="brandText" class="brand-text" src="/icons/logos/logotext.png" alt="Training Freaks" />
+      <img id="brandIcon" class="brand-icon" src="/icons/logos/logo.png" alt="TrainingFreaks logo" />
+      <img id="brandText" class="brand-text" src="/icons/logos/logotext.png" alt="TrainingFreaks" />
     </div>
     <nav class="tabs">
       <button class="tab active" data-view="home">Home</button>
@@ -25,7 +27,7 @@
 <div class="account-wrap" id="accountWrap">
         <button class="account-btn" id="accountMenuBtn" type="button" aria-label="Account menu">
           <span class="account-icon" aria-hidden="true">&#128100;</span>
-          <span>Amelia Gas</span>
+          <span>Amir LaGasse</span>
         </button>
         <div class="account-menu hidden" id="accountMenu">
           <button id="accountSettingsBtn" type="button">Settings</button>
@@ -42,7 +44,7 @@
     <section id="view-home" class="view active">
       <div class="home-user-row" id="homeUserRow">
         <span class="home-user-icon" aria-hidden="true">&#128100;</span>
-        <span class="home-username">Amelia Gas</span>
+        <span class="home-username">Amir LaGasse</span>
       </div>
       <div class="home-grid">
         <aside class="home-aside-left">
@@ -453,7 +455,7 @@
           <div class="wv-head-main">
             <div class="wv-row1">
               <div id="wvDateLine" class="wv-date-line">WEDNESDAY, FEBRUARY 11, 2026</div>
-              <select id="wvTimeSelect" class="wv-time-select"><option>8:07 am</option></select>
+              <select id="wvTimeSelect" class="wv-time-select"><option value="08:00">8:00 am</option></select>
               <div class="mini-chip ctl" id="wvHeadCtl">Fitness 0</div>
               <div class="mini-chip atl" id="wvHeadAtl">Fatigue 0</div>
               <div class="mini-chip tsb" id="wvHeadTsb">Form 0</div>
@@ -570,6 +572,7 @@
                         <select id="pcTssCompUnit" class="tp-unit-select" style="display:none;">
                           <option value="power">TSS</option>
                           <option value="hr">hrTSS</option>
+
                         </select>
                       </div>
                     </div>
@@ -644,11 +647,16 @@
                     <div class="field">
                       <label>How did you feel?</label>
                       <div class="feel-row" id="feelRow">
-                        <button class="feel-btn" type="button" data-feel="1" title="Very Weak">😫</button>
-                        <button class="feel-btn" type="button" data-feel="2" title="Weak">🙁</button>
-                        <button class="feel-btn" type="button" data-feel="3" title="Normal">😐</button>
-                        <button class="feel-btn" type="button" data-feel="4" title="Strong">🙂</button>
-                        <button class="feel-btn" type="button" data-feel="5" title="Very Strong">😁</button>
+                        <button class="feel-btn" type="button" data-feel="1" title="Very Weak"><img class="feel-btn-icon" src="/icons/feelings/very_weak.png" alt="Very Weak" onerror="this.style.display='none'; if(this.nextElementSibling){ this.nextElementSibling.style.display='inline'; }" /><span class="feel-btn-fallback">😫</span></button>
+                        <button class="feel-btn" type="button" data-feel="2" title="Weak"><img class="feel-btn-icon" src="/icons/feelings/weak.png" alt="Weak" onerror="this.style.display='none'; if(this.nextElementSibling){ this.nextElementSibling.style.display='inline'; }" /><span class="feel-btn-fallback">🙁</span></button>
+                        <button class="feel-btn" type="button" data-feel="3" title="Normal"><img class="feel-btn-icon" src="/icons/feelings/normal.png" alt="Normal" onerror="this.style.display='none'; if(this.nextElementSibling){ this.nextElementSibling.style.display='inline'; }" /><span class="feel-btn-fallback">😐</span></button>
+                        <button class="feel-btn" type="button" data-feel="4" title="Strong"><img class="feel-btn-icon" src="/icons/feelings/strong.png" alt="Strong" onerror="this.style.display='none'; if(this.nextElementSibling){ this.nextElementSibling.style.display='inline'; }" /><span class="feel-btn-fallback">🙂</span></button>
+                        <button class="feel-btn" type="button" data-feel="5" title="Very Strong"><img class="feel-btn-icon" src="/icons/feelings/very_strong.png" alt="Very Strong" onerror="this.style.display='none'; if(this.nextElementSibling){ this.nextElementSibling.style.display='inline'; }" /><span class="feel-btn-fallback">😁</span></button>
+                      </div>
+                      <div class="feel-scale-labels" aria-hidden="true">
+                        <span class="left">Very weak</span>
+                        <span class="center">Normal</span>
+                        <span class="right">Very strong</span>
                       </div>
                     </div>
                     <div class="field wv-rpe-field">
@@ -671,6 +679,7 @@
           <section id="wvAnalyze" class="hidden">
             <div class="wv-grid">
               <div>
+                <div id="wvMapPlaceholder" class="chart-box wv-map-placeholder hidden"></div>
                 <div class="chart-box" style="position:relative;">
                   <div class="analyze-toolbar">
                     <div class="analyze-toolbar-left">
@@ -788,6 +797,7 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js?v=20260423b"></script>
+  <script src="/static/js/leaflet.js"></script>
+    <script src="/static/js/app.js?v=20260420g"></script>
 </body>
 </html>
