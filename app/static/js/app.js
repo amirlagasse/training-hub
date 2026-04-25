@@ -242,6 +242,7 @@
     function toDisplayDistanceFromMeters(meters, unit = distanceUnit) {
       const m = Number(meters || 0);
       if (unit === 'm') return { value: m, unit: 'm' };
+      if (unit === 'yd') return { value: m / 0.9144, unit: 'yd' };
       if (unit === 'mi') return { value: m / 1609.344, unit: 'mi' };
       return { value: m / 1000, unit: 'km' };
     }
@@ -254,6 +255,7 @@
       const n = Number(val || 0);
       if (!Number.isFinite(n)) return 0;
       if (unit === 'm') return n / 1000;
+      if (unit === 'yd') return (n * 0.9144) / 1000;
       if (unit === 'mi') return n * 1.609344;
       return n;
     }
@@ -306,6 +308,227 @@
     function fmtElevation(meters) {
       const e = toDisplayElevationFromMeters(meters, elevationUnit);
       return `${Math.round(e.value)} ${e.unit}`;
+    }
+
+    function parseClockLikeSeconds(raw) {
+      const text = String(raw || '').trim();
+      if (!text) return 0;
+      if (text.includes(':')) {
+        const parts = text.split(':').map((p) => Number(p || 0));
+        if (parts.some((n) => !Number.isFinite(n))) return 0;
+        if (parts.length === 2) return (parts[0] * 60) + parts[1];
+        if (parts.length === 3) return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+      }
+      const n = Number(text);
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    function formatPaceFromMps(mps, mode, unitKey) {
+      const v = Number(mps || 0);
+      if (!(v > 0)) return '';
+      if (mode === 'per_100') {
+        const metersPerBlock = unitKey === 'yd' ? 91.44 : 100.0;
+        const sec = metersPerBlock / v;
+        return String(Math.round(sec));
+      }
+      const metersPerUnit = unitKey === 'mi' ? 1609.344 : 1000.0;
+      const sec = metersPerUnit / v;
+      const mm = Math.floor(sec / 60);
+      const ss = Math.round(sec % 60);
+      return `${mm}:${String(ss).padStart(2, '0')}`;
+    }
+
+    function parsePaceToMps(raw, mode, unitKey) {
+      const sec = parseClockLikeSeconds(raw);
+      if (!(sec > 0)) return 0;
+      if (mode === 'per_100') {
+        const metersPerBlock = unitKey === 'yd' ? 91.44 : 100.0;
+        return metersPerBlock / sec;
+      }
+      const metersPerUnit = unitKey === 'mi' ? 1609.344 : 1000.0;
+      return metersPerUnit / sec;
+    }
+
+    function workoutSummarySportKey(type) {
+      const t = String(type || '').toLowerCase();
+      if (t.includes('mountain') || t.includes('mtn bike') || t.includes('mtnbike')) return 'mtn_bike';
+      if (t.includes('day off') || t === 'rest' || t.includes('dayoff')) return 'day_off';
+      if (t.includes('cross')) return 'crosstrain';
+      if (t.includes('xc') && t.includes('ski')) return 'xc_ski';
+      if (t.includes('ski')) return 'xc_ski';
+      if (t.includes('row')) return 'rowing';
+      if (t.includes('walk')) return 'walk';
+      if (t.includes('swim')) return 'swim';
+      if (t.includes('brick')) return 'brick';
+      if (t.includes('strength')) return 'strength';
+      if (t.includes('custom')) return 'custom';
+      if (t.includes('bike') || t.includes('ride') || t.includes('cycl')) return 'bike';
+      if (t.includes('run')) return 'run';
+      if (t.includes('other')) return 'other';
+      return 'other';
+    }
+
+    function workoutSummaryProfile(type) {
+      const key = workoutSummarySportKey(type);
+      const base = {
+        key,
+        mainRows: ['duration', 'distance', 'calories', 'tss', 'if'],
+        distanceUnits: ['km', 'mi', 'm'],
+        elevationUnits: ['m', 'ft'],
+        avgPrimaryMode: 'speed',
+        avgPaceMode: 'per_distance',
+        showAvgSpeedRow: false,
+        showAvgPaceRow: false,
+        showElevationRow: false,
+        showElevationLossRow: false,
+        showNpRow: false,
+        showWorkRow: false,
+        minmaxRows: ['heart'],
+        equipment: ['shoes'],
+        lockAlways: ['pcNpPlan', 'wvPowerMin'],
+        lockPlannedOnly: [],
+      };
+      if (key === 'bike') {
+        return {
+          ...base,
+          showAvgSpeedRow: true,
+          showElevationRow: true,
+          showNpRow: true,
+          showWorkRow: true,
+          minmaxRows: ['heart', 'power'],
+          equipment: ['bike', 'shoes'],
+        };
+      }
+      if (key === 'swim') {
+        return {
+          ...base,
+          distanceUnits: ['yd', 'm'],
+          avgPrimaryMode: 'pace',
+          avgPaceMode: 'per_100',
+          showAvgPaceRow: true,
+          minmaxRows: ['pace'],
+          equipment: ['shoes', 'pools'],
+          lockAlways: ['pcNpPlan', 'wvPowerMin', 'wvPaceMin'],
+        };
+      }
+      if (key === 'run') {
+        return {
+          ...base,
+          distanceUnits: ['mi', 'km'],
+          avgPrimaryMode: 'pace',
+          avgPaceMode: 'per_distance',
+          showAvgPaceRow: true,
+          showElevationRow: true,
+          showElevationLossRow: true,
+          showWorkRow: true,
+          minmaxRows: ['pace', 'heart', 'elevation'],
+          equipment: ['shoes'],
+          lockAlways: ['pcNpPlan', 'wvPowerMin', 'wvPaceMin'],
+          lockPlannedOnly: ['pcElevLossPlan'],
+        };
+      }
+      if (key === 'mtn_bike') {
+        return {
+          ...base,
+          showAvgSpeedRow: true,
+          showAvgPaceRow: true,
+          avgPaceMode: 'per_distance',
+          showElevationRow: true,
+          showWorkRow: true,
+          minmaxRows: ['heart', 'power'],
+          equipment: ['bike', 'shoes'],
+        };
+      }
+      if (key === 'walk') {
+        return {
+          ...base,
+          distanceUnits: ['mi', 'km'],
+          avgPrimaryMode: 'pace',
+          avgPaceMode: 'per_distance',
+          showAvgPaceRow: true,
+          showElevationRow: true,
+          minmaxRows: ['heart'],
+          equipment: ['shoes'],
+          lockAlways: ['pcNpPlan', 'wvPowerMin', 'wvPaceMin'],
+        };
+      }
+      if (key === 'xc_ski') {
+        return {
+          ...base,
+          distanceUnits: ['mi', 'km'],
+          avgPrimaryMode: 'pace',
+          avgPaceMode: 'per_distance',
+          showAvgPaceRow: true,
+          minmaxRows: ['heart'],
+          equipment: ['shoes'],
+          lockAlways: ['pcNpPlan', 'wvPowerMin', 'wvPaceMin'],
+        };
+      }
+      if (key === 'rowing') {
+        return {
+          ...base,
+          distanceUnits: ['m', 'km'],
+          avgPrimaryMode: 'pace',
+          avgPaceMode: 'per_distance',
+          showAvgPaceRow: true,
+          minmaxRows: ['heart', 'power'],
+          equipment: ['shoes'],
+        };
+      }
+      if (key === 'brick') {
+        return {
+          ...base,
+          distanceUnits: ['mi', 'km'],
+          showAvgSpeedRow: true,
+          showAvgPaceRow: true,
+          avgPaceMode: 'per_distance',
+          showElevationRow: true,
+          showElevationLossRow: true,
+          showWorkRow: true,
+          minmaxRows: ['power', 'pace', 'heart'],
+          equipment: ['bike', 'shoes'],
+          lockAlways: ['pcNpPlan', 'wvPowerMin', 'wvPaceMin'],
+          lockPlannedOnly: ['pcElevLossPlan'],
+        };
+      }
+      if (key === 'crosstrain') {
+        return {
+          ...base,
+          mainRows: ['duration', 'distance', 'calories', 'tss', 'if'],
+          minmaxRows: ['heart'],
+          equipment: ['bike', 'shoes'],
+        };
+      }
+      if (key === 'day_off') {
+        return {
+          ...base,
+          mainRows: ['duration'],
+          minmaxRows: ['heart'],
+          equipment: ['shoes'],
+        };
+      }
+      if (key === 'strength') {
+        return {
+          ...base,
+          mainRows: ['duration', 'calories', 'tss', 'if'],
+          minmaxRows: ['heart'],
+          equipment: ['shoes'],
+        };
+      }
+      if (key === 'custom') {
+        return {
+          ...base,
+          mainRows: ['duration', 'distance', 'calories', 'tss', 'if'],
+          minmaxRows: ['heart'],
+          equipment: ['bike', 'shoes'],
+        };
+      }
+      return {
+        ...base,
+        mainRows: ['duration', 'distance', 'calories', 'tss', 'if'],
+        minmaxRows: ['heart'],
+        equipment: ['shoes'],
+      };
     }
 
     function isFutureDateKey(key) {
@@ -425,9 +648,7 @@
       if (item.kind !== 'workout') return 0;
       const plannedTss = Number(item.planned_tss || 0);
       if (plannedTss > 0) return plannedTss;
-      const userIntensity = Number(item.intensity || 0);
-      const intensity = userIntensity > 0 ? (0.45 + (Math.min(10, userIntensity) / 10) * 0.55) : intensityByType(item.workout_type || 'Other');
-      return estimateTss(Number(item.duration_min || 0), intensity);
+      return 0;
     }
 
     function plannedIF(item) {
@@ -491,15 +712,69 @@
       return !activityHasPlannedContent(activity);
     }
 
+    function hasManualCompletedOnlyContent(workout) {
+      if (!workout || workout.kind !== 'workout') return false;
+      const hasPlanned = ['duration', 'distance', 'tss'].some((basis) => plannedMetric(workout, basis) > 0);
+      const hasCompleted = !!completedFromPlanned(workout);
+      return hasCompleted && !hasPlanned;
+    }
+
+    function canPairManualCompletedWithPlanned(sourceCompleted, targetPlanned) {
+      if (!sourceCompleted || !targetPlanned) return false;
+      if (String(sourceCompleted.id) === String(targetPlanned.id)) return false;
+      if (!hasManualCompletedOnlyContent(sourceCompleted)) return false;
+      if (!hasPlannedOnlyContent(targetPlanned)) return false;
+      if (isFutureDateKey(String(targetPlanned.date || ''))) return false;
+      if (workoutTypeSportKey(sourceCompleted.workout_type) !== workoutTypeSportKey(targetPlanned.workout_type)) return false;
+      if (pairForPlanned(String(sourceCompleted.id))) return false;
+      if (pairForPlanned(String(targetPlanned.id))) return false;
+      return true;
+    }
+
     function canPairWorkouts(plannedItem, completedActivity) {
       if (!plannedItem || !completedActivity) return false;
       if (plannedItem.kind !== 'workout') return false;
       if (!hasPlannedOnlyContent(plannedItem)) return false;
-      if (!hasCompletedOnlyContent(completedActivity)) return false;
+      if (isFutureDateKey(String(plannedItem.date || ''))) return false;
       if (workoutTypeSportKey(plannedItem.workout_type) !== workoutTypeSportKey(completedActivity.type)) return false;
       if (pairForPlanned(String(plannedItem.id))) return false;
       if (pairForStrava(String(completedActivity.id))) return false;
       return true;
+    }
+
+    async function pairManualCompletedWithPlanned(sourceCompletedId, targetPlannedId) {
+      const source = calendarItems.find((i) => String(i.id) === String(sourceCompletedId));
+      const target = calendarItems.find((i) => String(i.id) === String(targetPlannedId));
+      if (!canPairManualCompletedWithPlanned(source, target)) return;
+
+      const merged = { ...target };
+      const completedFields = [
+        'completed_duration_min', 'completed_distance_km', 'completed_distance_m',
+        'completed_elevation_m', 'completed_tss', 'completed_if', 'completed_np',
+        'completed_work_kj', 'completed_calories', 'completed_avg_speed',
+        'completed_hr_min', 'completed_hr_avg', 'completed_hr_max',
+        'completed_power_min', 'completed_power_avg', 'completed_power_max',
+      ];
+      completedFields.forEach((field) => {
+        merged[field] = Number(source[field] || 0);
+      });
+
+      if (!String(merged.description || '').trim() && String(source.description || '').trim()) merged.description = source.description;
+      if (!String(merged.comments || '').trim() && String(source.comments || '').trim()) merged.comments = source.comments;
+      if ((!Array.isArray(merged.comments_feed) || !merged.comments_feed.length) && Array.isArray(source.comments_feed)) {
+        merged.comments_feed = source.comments_feed.slice();
+      }
+      if (!Number(merged.feel || 0) && Number(source.feel || 0)) merged.feel = Number(source.feel || 0);
+      if (!Number(merged.rpe || 0) && Number(source.rpe || 0)) merged.rpe = Number(source.rpe || 0);
+
+      const putResp = await fetch(`/calendar-items/${encodeURIComponent(String(target.id))}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(merged),
+      });
+      if (!putResp.ok) return;
+      await fetch(`/calendar-items/${encodeURIComponent(String(source.id))}`, { method: 'DELETE' });
+      await loadData();
     }
 
     function plannedMetric(plannedItem, basis) {
@@ -1353,12 +1628,31 @@
           },
         });
       }
-      if (currentPair) {
+      const canUnpairPlanned = payload.source === 'planned'
+        && payload.data
+        && payload.data.kind === 'workout'
+        && (currentPair || hasCompletedMetricsOnPlanned(payload.data));
+      const canUnpairCompleted = payload.source === 'strava'
+        && payload.data
+        && (currentPair || activityHasPlannedContent(payload.data));
+      if (canUnpairPlanned || canUnpairCompleted) {
         opts.push({
           label: 'Unpair',
           onClick: async () => {
-            await fetch(`/pairs/${currentPair.id}`, { method: 'DELETE' });
-            await loadData();
+            if (currentPair) {
+              await fetch(`/pairs/${currentPair.id}`, { method: 'DELETE' });
+              await loadData();
+              return;
+            }
+            if (canUnpairPlanned) {
+              const ok = await clearCompletedFieldsOnPlanned(payload.data);
+              if (ok) await loadData();
+              return;
+            }
+            if (canUnpairCompleted) {
+              const ok = await clearPlannedFieldsOnCompleted(payload.data);
+              if (ok) await loadData();
+            }
           },
         });
       }
@@ -1368,79 +1662,7 @@
     }
 
     function confirmAndPair(plannedId, stravaId) {
-      if (localStorage.getItem('pair_skip_confirm') === 'true') {
-        pairWorkouts(plannedId, stravaId);
-        return;
-      }
-      const planned = calendarItems.find(i => String(i.id) === String(plannedId));
-      const completed = activities.find(a => String(a.id) === String(stravaId));
-      if (!planned || !completed) return;
-
-      const cDur  = hms(Number(completed.moving_time || 0));
-      const cDist = fmtDistanceMeters(Number(completed.distance || 0));
-      const cTss  = Math.round(activityToTss(completed));
-      const pDur  = formatDurationClockCompact(Number(planned.duration_min || 0));
-      const pDistMeters = Number(planned.distance_m || Number(planned.distance_km || 0) * 1000);
-      const pDist = pDistMeters > 0 ? fmtDistanceMetersInUnit(pDistMeters, planned.distance_unit || distanceUnit || 'km') : '--';
-      const pTssRaw = Math.round(itemToTss(planned));
-      const pTss = pTssRaw > 0 ? pTssRaw : '--';
-      const sportKey = workoutTypeSportKey(planned.workout_type || completed.type);
-      const iconSrc = ICON_ASSETS[sportKey] || ICON_ASSETS.other;
-      const type = canonicalWorkoutType(planned.workout_type || completed.type || 'Workout', 'Workout');
-      const plannedTitle = String(planned.title || `Untitled ${type} Workout`).trim() || `Untitled ${type} Workout`;
-      const completedTitle = String(completed.name || `Untitled ${type} Workout`).trim() || `Untitled ${type} Workout`;
-      const plannedStatus = complianceStatus(planned, null, String(planned.date || todayKey())).cls;
-      const plannedPreviewClass = plannedStatus === 'paired-red' ? 'pair-preview-status-red' : 'pair-preview-status-white';
-
-      const overlay = document.createElement('div');
-      overlay.className = 'pair-confirm-overlay';
-      overlay.innerHTML = `
-        <div class="pair-confirm-modal">
-          <h3 class="pair-confirm-title">Are you sure you want to pair these workouts?</h3>
-          <p class="pair-confirm-sub">Pairing will attach the completed workout to the planned workout. All of your data, descriptions, and comments will remain intact.</p>
-          <div class="pair-confirm-preview">
-            <div class="pair-preview-col">
-              <p class="pair-preview-label">PLANNED</p>
-              <div class="pair-preview-card pair-preview-planned ${plannedPreviewClass}">
-                <img src="${iconSrc}" class="pair-preview-icon" />
-                <strong>${plannedTitle}</strong>
-                <span>${pDur}</span>
-                <span>${pDist}</span>
-                <span>${pTss} TSS</span>
-              </div>
-            </div>
-            <div class="pair-confirm-arrow">&#8594;</div>
-            <div class="pair-preview-col">
-              <p class="pair-preview-label">COMPLETED</p>
-              <div class="pair-preview-card pair-preview-done">
-                <img src="${iconSrc}" class="pair-preview-icon" />
-                <strong>${completedTitle}</strong>
-                <span>${cDur}&#10003;</span>
-                <span>${cDist}</span>
-                <span>${cTss} TSS</span>
-              </div>
-            </div>
-          </div>
-          <label class="pair-confirm-skip">
-            <input type="checkbox" id="pairSkipCheck" /> Don't show this again
-          </label>
-          <div class="pair-confirm-btns">
-            <button class="btn-secondary" id="pairCancelBtn">Cancel</button>
-            <button class="btn-primary" id="pairConfirmBtn">Pair</button>
-          </div>
-        </div>`;
-
-      document.body.appendChild(overlay);
-
-      overlay.querySelector('#pairCancelBtn').addEventListener('click', () => overlay.remove());
-      overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
-      overlay.querySelector('#pairConfirmBtn').addEventListener('click', async () => {
-        if (overlay.querySelector('#pairSkipCheck').checked) {
-          localStorage.setItem('pair_skip_confirm', 'true');
-        }
-        overlay.remove();
-        await pairWorkouts(plannedId, stravaId);
-      });
+      pairWorkouts(plannedId, stravaId);
     }
 
     async function pairWorkouts(plannedId, stravaId) {
@@ -1462,6 +1684,103 @@
         }),
       });
       await loadData();
+    }
+
+    function hasCompletedMetricsOnPlanned(item) {
+      return !!(item && hasAnyCompletedMetric(item, 'planned'));
+    }
+
+    async function clearCompletedFieldsOnPlanned(item) {
+      if (!item || item.kind !== 'workout' || !item.id) return false;
+      const cleared = { ...item };
+      const completedFields = [
+        'completed_duration_min', 'completed_distance_km', 'completed_distance_m',
+        'completed_elevation_m', 'completed_tss', 'completed_if', 'completed_np',
+        'completed_work_kj', 'completed_calories', 'completed_avg_speed',
+        'completed_hr_min', 'completed_hr_avg', 'completed_hr_max',
+        'completed_power_min', 'completed_power_avg', 'completed_power_max',
+      ];
+      completedFields.forEach((field) => {
+        cleared[field] = 0;
+      });
+      const resp = await fetch(`/calendar-items/${encodeURIComponent(String(item.id))}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cleared),
+      });
+      return resp.ok;
+    }
+
+    async function clearPlannedFieldsOnCompleted(activity) {
+      if (!activity || !activity.id) return false;
+      const resp = await fetch(`/activities/${encodeURIComponent(String(activity.id))}/meta`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          duration_min: 0,
+          distance_km: 0,
+          distance_m: 0,
+          elevation_m: 0,
+          planned_tss: 0,
+          planned_if: 0,
+          planned_avg_speed: 0,
+          planned_calories: 0,
+          planned_work_kj: 0,
+        }),
+      });
+      return resp.ok;
+    }
+
+    async function movePlannedWorkoutToDate(item, targetDate) {
+      if (!item || item.kind !== 'workout' || !item.id) return false;
+      const targetKey = String(targetDate || '');
+      if (!targetKey || targetKey === String(item.date || '')) return false;
+      if (hasCompletedMetricsOnPlanned(item) && isFutureDateKey(targetKey)) return false;
+
+      const putResp = await fetch(`/calendar-items/${encodeURIComponent(String(item.id))}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...item, date: targetKey }),
+      });
+      if (!putResp.ok) return false;
+
+      const linkedPair = pairForPlanned(String(item.id));
+      if (linkedPair && linkedPair.strava_id) {
+        await fetch(`/activities/${encodeURIComponent(String(linkedPair.strava_id))}/meta`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: targetKey }),
+        });
+      }
+      return true;
+    }
+
+    async function moveCompletedWorkoutToDate(activity, targetDate) {
+      if (!activity || !activity.id) return false;
+      const targetKey = String(targetDate || '');
+      if (!targetKey || isFutureDateKey(targetKey)) return false;
+      const currentKey = dateKeyFromDate(new Date(activity.start_date_local || new Date()));
+      if (targetKey === currentKey) return false;
+
+      const resp = await fetch(`/activities/${encodeURIComponent(String(activity.id))}/meta`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: targetKey }),
+      });
+      if (!resp.ok) return false;
+
+      const linkedPair = pairForStrava(String(activity.id));
+      if (linkedPair && linkedPair.planned_id) {
+        const plannedItem = calendarItems.find((i) => String(i.id) === String(linkedPair.planned_id));
+        if (plannedItem && plannedItem.kind === 'workout' && String(plannedItem.date || '') !== targetKey) {
+          await fetch(`/calendar-items/${encodeURIComponent(String(plannedItem.id))}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...plannedItem, date: targetKey }),
+          });
+        }
+      }
+      return true;
     }
 
     function updateRpeLabel() {
@@ -1498,10 +1817,14 @@
           pcDistComp: val('pcDistComp'),
           pcAvgSpeedPlan: val('pcAvgSpeedPlan'),
           pcAvgSpeedComp: val('pcAvgSpeedComp'),
+          pcAvgPacePlan: val('pcAvgPacePlan'),
+          pcAvgPaceComp: val('pcAvgPaceComp'),
           pcCaloriesPlan: val('pcCaloriesPlan'),
           pcCaloriesComp: val('pcCaloriesComp'),
           pcElevPlan: val('pcElevPlan'),
           pcElevComp: val('pcElevComp'),
+          pcElevLossPlan: val('pcElevLossPlan'),
+          pcElevLossComp: val('pcElevLossComp'),
           pcTssPlan: val('pcTssPlan'),
           pcTssComp: val('pcTssComp'),
           pcIfPlan: val('pcIfPlan'),
@@ -1515,6 +1838,12 @@
           wvPowerMin: val('wvPowerMin'),
           wvPowerAvg: val('wvPowerAvg'),
           wvPowerMax: val('wvPowerMax'),
+          wvPaceMin: val('wvPaceMin'),
+          wvPaceAvg: val('wvPaceAvg'),
+          wvPaceMax: val('wvPaceMax'),
+          wvElevMin: val('wvElevMin'),
+          wvElevAvg: val('wvElevAvg'),
+          wvElevMax: val('wvElevMax'),
         },
       };
     }
@@ -1555,19 +1884,29 @@
 
     function recalcIfTssRows() {
       const parseDurHours = (id) => parseDurationToMin(document.getElementById(id).value) / 60;
-      const recalcPair = (durId, tssId, ifId) => {
+      const recalcPlanned = (durId, tssId, ifId) => {
         const hours = parseDurHours(durId);
         const tss = Number(document.getElementById(tssId).value || 0);
         const ifv = Number(document.getElementById(ifId).value || 0);
         if (hours <= 0) return;
-        if (ifv > 0) {
-          document.getElementById(tssId).value = (hours * ifv * ifv * 100).toFixed(1);
-        } else if (tss > 0) {
+        // Planned TSS is manual-only. Never auto-fill from IF.
+        if (tss > 0 && !(ifv > 0)) {
           document.getElementById(ifId).value = Math.sqrt(tss / (hours * 100)).toFixed(2);
         }
       };
-      recalcPair('pcDurPlan', 'pcTssPlan', 'pcIfPlan');
-      recalcPair('pcDurComp', 'pcTssComp', 'pcIfComp');
+      const recalcCompleted = (durId, tssId, ifId) => {
+        const hours = parseDurHours(durId);
+        const tss = Number(document.getElementById(tssId).value || 0);
+        const ifv = Number(document.getElementById(ifId).value || 0);
+        if (hours <= 0) return;
+        if (ifv > 0 && !(tss > 0)) {
+          document.getElementById(tssId).value = (hours * ifv * ifv * 100).toFixed(1);
+        } else if (tss > 0 && !(ifv > 0)) {
+          document.getElementById(ifId).value = Math.sqrt(tss / (hours * 100)).toFixed(2);
+        }
+      };
+      recalcPlanned('pcDurPlan', 'pcTssPlan', 'pcIfPlan');
+      recalcCompleted('pcDurComp', 'pcTssComp', 'pcIfComp');
     }
 
     function renderWorkoutFiles(payload) {
@@ -1576,7 +1915,7 @@
       const browseBtn = document.getElementById('wvBrowseFilesBtn');
       browseBtn.disabled = false;
       const rows = [];
-      const hasExisting = !!data.fit_id;
+      const hasExisting = !!data.fit_id && !!data.fit_filename;
       if (hasExisting && modalDraft && modalDraft.pendingDeleteFit) {
         rows.push(`
           <div class="wv-file-row">
@@ -1790,11 +2129,11 @@
       }
       const data = payload.data || {};
       const targetPlanned = payload.planned || (payload.source === 'planned' ? data : null);
-      recalcIfTssRows();
       const description = document.getElementById('wvDescription').value;
       const commentsFeed = modalDraft ? modalDraft.commentsFeed.slice() : [];
       const comments = commentsFeed.length ? commentsFeed[commentsFeed.length - 1] : '';
       const sport = (modalDraft && modalDraft.sportType) || 'Other';
+      const sportProfile = workoutSummaryProfile(sport);
       const distanceUnitLocal = document.getElementById('pcDistanceUnit').value || 'km';
       const elevationUnitLocal = document.getElementById('pcElevationUnit').value || 'm';
       const persistedDistanceUnit = distanceUnitLocal;
@@ -1804,16 +2143,22 @@
       const plannedElevationM = fromDisplayElevationToMeters(document.getElementById('pcElevPlan').value, elevationUnitLocal);
       const plannedTss = Number(document.getElementById('pcTssPlan').value || 0);
       const plannedIf = Number(document.getElementById('pcIfPlan').value || 0);
-      const plannedAvgSpeedDisplay = Number(document.getElementById('pcAvgSpeedPlan').value || 0);
-      const plannedAvgSpeed = Number.isFinite(plannedAvgSpeedDisplay) && plannedAvgSpeedDisplay > 0
-        ? (distanceUnitLocal === 'mi'
-          ? (plannedAvgSpeedDisplay / 2.23694)
-          : (distanceUnitLocal === 'km'
-            ? (plannedAvgSpeedDisplay / 3.6)
-            : plannedAvgSpeedDisplay))
-        : 0;
+      const parseAvgToMps = (speedFieldId, paceFieldId) => {
+        if (sportProfile.avgPrimaryMode === 'pace') {
+          const paceText = document.getElementById(paceFieldId).value;
+          return parsePaceToMps(paceText, sportProfile.avgPaceMode, distanceUnitLocal);
+        }
+        const speedVal = Number(document.getElementById(speedFieldId).value || 0);
+        if (!(Number.isFinite(speedVal) && speedVal > 0)) return 0;
+        if (distanceUnitLocal === 'mi') return speedVal / 2.23694;
+        if (distanceUnitLocal === 'km') return speedVal / 3.6;
+        if (distanceUnitLocal === 'yd') return speedVal * 0.9144;
+        return speedVal;
+      };
+      const plannedAvgSpeed = parseAvgToMps('pcAvgSpeedPlan', 'pcAvgPacePlan');
       const plannedCalories = Number(document.getElementById('pcCaloriesPlan').value || 0);
       const plannedWorkKj = Number(document.getElementById('pcWorkPlan').value || 0);
+      const plannedElevationLossM = fromDisplayElevationToMeters(document.getElementById('pcElevLossPlan').value, elevationUnitLocal);
       const completedDuration = parseDurationToMin(document.getElementById('pcDurComp').value);
       const completedDistanceM = fromDisplayDistanceToMeters(document.getElementById('pcDistComp').value, distanceUnitLocal);
       const completedElevationM = fromDisplayElevationToMeters(document.getElementById('pcElevComp').value, elevationUnitLocal);
@@ -1822,29 +2167,27 @@
       const completedNp = Number(document.getElementById('pcNpComp').value || 0);
       const completedWorkKj = Number(document.getElementById('pcWorkComp').value || 0);
       const completedCalories = Number(document.getElementById('pcCaloriesComp').value || 0);
+      const completedElevationLossM = fromDisplayElevationToMeters(document.getElementById('pcElevLossComp').value, elevationUnitLocal);
       const completedHrMin = Number(document.getElementById('wvHrMin').value || 0);
       const completedHrAvg = Number(document.getElementById('wvHrAvg').value || 0);
       const completedHrMax = Number(document.getElementById('wvHrMax').value || 0);
       const completedPowerMin = Number(document.getElementById('wvPowerMin').value || 0);
       const completedPowerAvg = Number(document.getElementById('wvPowerAvg').value || 0);
       const completedPowerMax = Number(document.getElementById('wvPowerMax').value || 0);
-      const completedAvgSpeedDisplay = Number(document.getElementById('pcAvgSpeedComp').value || 0);
-      const completedAvgSpeed = Number.isFinite(completedAvgSpeedDisplay) && completedAvgSpeedDisplay > 0
-        ? (distanceUnitLocal === 'mi'
-          ? (completedAvgSpeedDisplay / 2.23694)
-          : (distanceUnitLocal === 'km'
-            ? (completedAvgSpeedDisplay / 3.6)
-            : completedAvgSpeedDisplay))
-        : 0;
+      const completedAvgSpeed = parseAvgToMps('pcAvgSpeedComp', 'pcAvgPaceComp');
       const hasCompleted = completedDuration > 0 || completedDistanceM > 0 || completedTss > 0 || payload.source === 'strava';
       const hasAnyNumericValue = plannedDuration > 0
         || plannedDistanceM > 0
+        || plannedAvgSpeed > 0
         || plannedElevationM > 0
+        || plannedElevationLossM > 0
         || plannedTss > 0
         || plannedIf > 0
         || completedDuration > 0
         || completedDistanceM > 0
+        || completedAvgSpeed > 0
         || completedElevationM > 0
+        || completedElevationLossM > 0
         || completedTss > 0
         || completedIf > 0;
       const rpeVal = Number(document.getElementById('wvRpe').value || 0);
@@ -2061,15 +2404,28 @@
       const data = payload.data || {};
       const parentPlanned = payload.planned || null;
       const explicitCompleted = parentPlanned ? completedFromPlanned(parentPlanned) : completedFromPlanned(data);
-      const completedDurationMin = payload.source === 'strava'
-        ? completedDurationMinValue(data)
-        : explicitCompleted ? Number(explicitCompleted.moving_time || 0) / 60 : 0;
-      const completedDistanceM = payload.source === 'strava'
-        ? Number(data.distance || 0)
-        : explicitCompleted ? Number(explicitCompleted.distance || 0) : Number((parentPlanned || data).completed_distance_m || 0);
-      const completedTssRaw = payload.source === 'strava'
-        ? activityToTss(data)
-        : explicitCompleted ? Number(explicitCompleted.tss_override || 0) : 0;
+      const plannedCompletedDuration = Number(parentPlanned ? parentPlanned.completed_duration_min || 0 : 0);
+      const plannedCompletedDistanceM = Number(parentPlanned
+        ? ((parentPlanned.completed_distance_m || 0) || (Number(parentPlanned.completed_distance_km || 0) * 1000))
+        : 0);
+      const plannedCompletedTss = Number(parentPlanned ? parentPlanned.completed_tss || 0 : 0);
+      const plannedCompletedIf = Number(parentPlanned ? parentPlanned.completed_if || 0 : 0);
+      const plannedCompletedNp = Number(parentPlanned ? parentPlanned.completed_np || 0 : 0);
+      const completedDurationMin = plannedCompletedDuration > 0
+        ? plannedCompletedDuration
+        : (payload.source === 'strava'
+          ? completedDurationMinValue(data)
+          : explicitCompleted ? Number(explicitCompleted.moving_time || 0) / 60 : 0);
+      const completedDistanceM = plannedCompletedDistanceM > 0
+        ? plannedCompletedDistanceM
+        : (payload.source === 'strava'
+          ? Number(data.distance || 0)
+          : explicitCompleted ? Number(explicitCompleted.distance || 0) : Number((parentPlanned || data).completed_distance_m || 0));
+      const completedTssRaw = plannedCompletedTss > 0
+        ? plannedCompletedTss
+        : (payload.source === 'strava'
+          ? activityToTss(data)
+          : explicitCompleted ? Number(explicitCompleted.tss_override || 0) : 0);
       const typeLabel = parentPlanned
         ? (parentPlanned.workout_type || 'Workout')
         : payload.source === 'strava'
@@ -2080,12 +2436,36 @@
         : payload.source === 'strava'
           ? new Date(data.start_date_local).toLocaleString()
           : `${data.date} (Planned)`;
+      const workoutDateKey = parentPlanned
+        ? String(parentPlanned.date || '')
+        : payload.source === 'strava'
+          ? dateKeyFromDate(new Date(data.start_date_local || new Date()))
+          : String(data.date || '');
+      const isFutureWorkout = isFutureDateKey(workoutDateKey);
       const plannedObj = parentPlanned || data;
-      const isCycling = String(typeLabel || '').toLowerCase().includes('bike') || String(typeLabel || '').toLowerCase().includes('ride');
+      const summaryProfile = workoutSummaryProfile(typeLabel);
+      if (modalDraft) {
+        modalDraft.avgPrimaryMode = summaryProfile.avgPrimaryMode;
+        modalDraft.avgPaceMode = summaryProfile.avgPaceMode;
+      }
       let distanceUnitLocal = String(plannedObj.distance_unit || distanceUnit || 'km');
       let elevationUnitLocal = String(plannedObj.elevation_unit || elevationUnit || 'm');
-      syncUnitSelectValue('pcDistanceUnit', distanceUnitLocal, ['km', 'mi', 'm']);
-      syncUnitSelectValue('pcElevationUnit', elevationUnitLocal, ['m', 'ft']);
+      if (!summaryProfile.distanceUnits.includes(distanceUnitLocal)) {
+        distanceUnitLocal = summaryProfile.distanceUnits[0];
+      }
+      if (!summaryProfile.elevationUnits.includes(elevationUnitLocal)) {
+        elevationUnitLocal = summaryProfile.elevationUnits[0];
+      }
+      const distanceSelect = document.getElementById('pcDistanceUnit');
+      if (distanceSelect) {
+        distanceSelect.innerHTML = summaryProfile.distanceUnits.map((u) => `<option value="${u}">${u}</option>`).join('');
+      }
+      const elevationSelect = document.getElementById('pcElevationUnit');
+      if (elevationSelect) {
+        elevationSelect.innerHTML = summaryProfile.elevationUnits.map((u) => `<option value="${u}">${u}</option>`).join('');
+      }
+      syncUnitSelectValue('pcDistanceUnit', distanceUnitLocal, summaryProfile.distanceUnits);
+      syncUnitSelectValue('pcElevationUnit', elevationUnitLocal, summaryProfile.elevationUnits);
 
       document.getElementById('wvSummaryText').textContent = '';
       document.getElementById('wvDescription').value = (parentPlanned && parentPlanned.description) || data.description || '';
@@ -2106,10 +2486,16 @@
       const plannedDuration = parentPlanned ? Number(parentPlanned.duration_min || 0) : Number(data.duration_min || 0);
       const plannedDistanceM = Number((plannedObj.distance_m || 0) || (Number(plannedObj.distance_km || 0) * 1000));
       const plannedElevationM = Number(plannedObj.elevation_m || 0);
-      const completedElevationM = payload.source === 'strava'
-        ? Number(data.elev_gain_m || 0)
-        : Number(plannedObj.completed_elevation_m || 0);
-      const plannedTss = Number(plannedObj.planned_tss || 0) || (parentPlanned ? itemToTss(parentPlanned) : itemToTss(data));
+      const plannedElevationLossM = Number(plannedObj.elevation_loss_m || plannedObj.planned_elevation_loss_m || 0);
+      const completedElevationM = Number(parentPlanned ? parentPlanned.completed_elevation_m || 0 : 0) > 0
+        ? Number(parentPlanned.completed_elevation_m || 0)
+        : (payload.source === 'strava'
+          ? Number(data.elev_gain_m || 0)
+          : Number(plannedObj.completed_elevation_m || 0));
+      const completedElevationLossM = Number(parentPlanned ? parentPlanned.completed_elevation_loss_m || 0 : 0) > 0
+        ? Number(parentPlanned.completed_elevation_loss_m || 0)
+        : Number(data.elev_loss_m || plannedObj.completed_elevation_loss_m || 0);
+      const plannedTss = Number(plannedObj.planned_tss || 0);
       const plannedIf = plannedIF(plannedObj);
       const completedIfRaw = payload.source === 'strava' ? activityIF(data) : completedIF({
         completed_if: plannedObj.completed_if,
@@ -2118,18 +2504,25 @@
         avg_power: data.avg_power,
         type: plannedObj.workout_type || data.type,
       });
-      const fitComputedNp = Number((data.np_value ?? data.normalized_power ?? data.np ?? plannedObj.completed_np) || 0);
-      const fitComputedIf = Number((data.if_value ?? completedIfRaw) || 0);
-      const fitComputedTss = Number((data.tss_override ?? completedTssRaw) || 0);
+      const fitComputedNp = plannedCompletedNp > 0
+        ? plannedCompletedNp
+        : Number((data.np_value ?? data.normalized_power ?? data.np ?? plannedObj.completed_np) || 0);
+      const fitComputedIf = plannedCompletedIf > 0
+        ? plannedCompletedIf
+        : Number((data.if_value ?? completedIfRaw) || 0);
+      const fitComputedTss = plannedCompletedTss > 0
+        ? plannedCompletedTss
+        : Number((data.tss_override ?? completedTssRaw) || 0);
       const completedNp = fitComputedNp > 0 ? fitComputedNp : null;
       let completedIf = fitComputedIf > 0 ? fitComputedIf : null;
-      const powerTssValue = (isCycling && !completedNp) ? null : (fitComputedTss > 0 ? fitComputedTss : null);
+      const powerTssValue = fitComputedTss > 0 ? fitComputedTss : null;
       const hrTssValue = calcHrTss(data);
-      const hasBothTss = !!(powerTssValue && hrTssValue);
-      let activeTssSource = data.tss_source || (powerTssValue ? 'power' : 'hr');
-      let completedTss = activeTssSource === 'hr' ? (hrTssValue || powerTssValue) : (powerTssValue || hrTssValue);
+      const hasBothTss = !plannedCompletedTss && !!(powerTssValue && hrTssValue);
+      let activeTssSource = (modalDraft && modalDraft.tssSource) || data.tss_source || (powerTssValue ? 'power' : 'hr');
+      let completedTss = plannedCompletedTss > 0
+        ? plannedCompletedTss
+        : (activeTssSource === 'hr' ? (hrTssValue || powerTssValue) : (powerTssValue || hrTssValue));
       if (!completedTss) completedTss = null;
-      if (isCycling && !completedNp) completedIf = null;
 
       const tssUnitLabel = document.getElementById('pcTssUnitLabel');
       const tssCompUnit = document.getElementById('pcTssCompUnit');
@@ -2146,21 +2539,36 @@
       }
       if (tssUnitLabel) tssUnitLabel.style.display = hasBothTss ? 'none' : '';
       if (modalDraft) modalDraft.tssSource = activeTssSource;
-      const completedWorkKj = Number((data.work_kj ?? plannedObj.completed_work_kj ?? 0) || 0);
-      const completedCalories = Number((data.calories ?? plannedObj.completed_calories ?? 0) || 0);
+      const completedWorkKj = parentPlanned
+        ? Number((plannedObj.completed_work_kj ?? data.work_kj ?? 0) || 0)
+        : Number((data.work_kj ?? plannedObj.completed_work_kj ?? 0) || 0);
+      const completedCalories = parentPlanned
+        ? Number((plannedObj.completed_calories ?? data.calories ?? 0) || 0)
+        : Number((data.calories ?? plannedObj.completed_calories ?? 0) || 0);
       const plannedAvgSpeed = Number(plannedObj.planned_avg_speed || 0);
       const plannedCalories = Number(plannedObj.planned_calories || 0);
       const plannedWorkKj = Number(plannedObj.planned_work_kj || 0);
-      const compAvgSpeed = payload.source === 'strava'
-        ? Number(data.avg_speed || 0)
-        : Number(plannedObj.completed_avg_speed || 0);
-      const speedLabel = distanceUnitLocal === 'mi' ? 'mph' : (distanceUnitLocal === 'm' ? 'm/s' : 'km/h');
+      const compAvgSpeed = parentPlanned
+        ? Number(plannedObj.completed_avg_speed || data.avg_speed || 0)
+        : (payload.source === 'strava'
+          ? Number(data.avg_speed || 0)
+          : Number(plannedObj.completed_avg_speed || 0));
+      const speedLabel = distanceUnitLocal === 'mi'
+        ? 'mph'
+        : (distanceUnitLocal === 'm'
+          ? 'm/s'
+          : (distanceUnitLocal === 'yd' ? 'yd/s' : 'km/h'));
+      const paceLabel = summaryProfile.avgPaceMode === 'per_100'
+        ? `sec/100 ${distanceUnitLocal}`
+        : (distanceUnitLocal === 'mi' ? 'min/mi' : 'min/km');
       const speedToDisplay = (v) => {
         if (!Number.isFinite(v) || v <= 0) return '';
         if (distanceUnitLocal === 'mi') return (v * 2.23694).toFixed(1);
+        if (distanceUnitLocal === 'yd') return (v / 0.9144).toFixed(2);
         if (distanceUnitLocal === 'm') return v.toFixed(2);
         return (v * 3.6).toFixed(1);
       };
+      const paceToDisplay = (v) => formatPaceFromMps(v, summaryProfile.avgPaceMode, distanceUnitLocal);
 
       document.getElementById('pcDurPlan').value = plannedDuration ? formatDurationClock(plannedDuration) : '';
       document.getElementById('pcDurComp').value = completedDurationMin ? formatDurationClock(completedDurationMin) : '';
@@ -2168,29 +2576,45 @@
       const cd = toDisplayDistanceFromMeters(completedDistanceM, distanceUnitLocal);
       const pe = toDisplayElevationFromMeters(plannedElevationM, elevationUnitLocal);
       const ce = toDisplayElevationFromMeters(completedElevationM, elevationUnitLocal);
+      const pel = toDisplayElevationFromMeters(plannedElevationLossM, elevationUnitLocal);
+      const cel = toDisplayElevationFromMeters(completedElevationLossM, elevationUnitLocal);
       document.getElementById('pcDistPlan').value = plannedDistanceM > 0 ? pd.value.toFixed(distanceUnitLocal === 'm' ? 0 : 1) : '';
       document.getElementById('pcDistComp').value = completedDistanceM > 0 ? cd.value.toFixed(distanceUnitLocal === 'm' ? 0 : 1) : '';
       document.getElementById('pcElevPlan').value = plannedElevationM > 0 ? pe.value.toFixed(elevationUnitLocal === 'm' ? 0 : 1) : '';
       document.getElementById('pcElevComp').value = completedElevationM > 0 ? ce.value.toFixed(elevationUnitLocal === 'm' ? 0 : 1) : '';
+      document.getElementById('pcElevLossPlan').value = plannedElevationLossM > 0 ? pel.value.toFixed(elevationUnitLocal === 'm' ? 0 : 1) : '';
+      document.getElementById('pcElevLossComp').value = completedElevationLossM > 0 ? cel.value.toFixed(elevationUnitLocal === 'm' ? 0 : 1) : '';
       document.getElementById('pcTssPlan').value = plannedTss ? String(Math.round(plannedTss)) : '';
       document.getElementById('pcTssComp').value = completedTss ? String(Math.round(completedTss)) : '';
       document.getElementById('pcIfPlan').value = plannedIf ? Number(plannedIf).toFixed(2) : '';
       document.getElementById('pcIfComp').value = completedIf ? Number(completedIf).toFixed(2) : '';
       document.getElementById('pcAvgSpeedPlan').value = speedToDisplay(plannedAvgSpeed);
       document.getElementById('pcAvgSpeedComp').value = speedToDisplay(compAvgSpeed);
+      document.getElementById('pcAvgPacePlan').value = paceToDisplay(plannedAvgSpeed);
+      document.getElementById('pcAvgPaceComp').value = paceToDisplay(compAvgSpeed);
       document.getElementById('pcCaloriesPlan').value = plannedCalories > 0 ? String(Math.round(plannedCalories)) : '';
       document.getElementById('pcCaloriesComp').value = completedCalories > 0 ? String(Math.round(completedCalories)) : '';
       document.getElementById('pcNpPlan').value = '';
       document.getElementById('pcNpComp').value = completedNp ? String(Math.round(completedNp)) : '';
       document.getElementById('pcWorkPlan').value = plannedWorkKj > 0 ? String(Math.round(plannedWorkKj)) : '';
       document.getElementById('pcWorkComp').value = completedWorkKj > 0 ? String(Math.round(completedWorkKj)) : '';
-      document.querySelector('#pcAvgSpeedPlan').closest('.tp-row').querySelector('.tp-unit').textContent = speedLabel;
+      document.getElementById('pcAvgSpeedUnit').textContent = speedLabel;
+      document.getElementById('pcAvgPaceUnit').textContent = paceLabel;
+      document.getElementById('pcElevLossUnit').textContent = elevationUnitLocal;
       document.getElementById('wvHrMin').value = (data.min_hr ?? plannedObj.completed_hr_min) ? String(Math.round(data.min_hr ?? plannedObj.completed_hr_min)) : '';
       document.getElementById('wvHrAvg').value = (data.avg_hr ?? plannedObj.completed_hr_avg) ? String(Math.round(data.avg_hr ?? plannedObj.completed_hr_avg)) : '';
       document.getElementById('wvHrMax').value = (data.max_hr ?? plannedObj.completed_hr_max) ? String(Math.round(data.max_hr ?? plannedObj.completed_hr_max)) : '';
       document.getElementById('wvPowerMin').value = (data.min_power ?? plannedObj.completed_power_min) ? String(Math.round(data.min_power ?? plannedObj.completed_power_min)) : '';
       document.getElementById('wvPowerAvg').value = (data.avg_power ?? plannedObj.completed_power_avg) ? String(Math.round(data.avg_power ?? plannedObj.completed_power_avg)) : '';
       document.getElementById('wvPowerMax').value = (data.max_power ?? plannedObj.completed_power_max) ? String(Math.round(data.max_power ?? plannedObj.completed_power_max)) : '';
+      document.getElementById('wvPaceMin').value = '';
+      document.getElementById('wvPaceAvg').value = paceToDisplay(compAvgSpeed);
+      document.getElementById('wvPaceMax').value = '';
+      document.getElementById('wvPaceUnit').textContent = paceLabel;
+      document.getElementById('wvElevMin').value = '';
+      document.getElementById('wvElevAvg').value = completedElevationM > 0 ? String(Math.round(toDisplayElevationFromMeters(completedElevationM, elevationUnitLocal).value)) : '';
+      document.getElementById('wvElevMax').value = completedElevationM > 0 ? String(Math.round(toDisplayElevationFromMeters(completedElevationM, elevationUnitLocal).value)) : '';
+      document.getElementById('wvElevUnit').textContent = elevationUnitLocal;
       const hrRow = document.getElementById('wvHrMin').closest('.tp-minmax-row');
       if (hrRow) hrRow.style.gridTemplateColumns = '110px 1.5fr 1.5fr 1.5fr 80px';
       if (data.fit_id) {
@@ -2203,6 +2627,15 @@
           if (s.min_power) document.getElementById('wvPowerMin').value = String(Math.round(s.min_power));
           if (s.avg_power) document.getElementById('wvPowerAvg').value = String(Math.round(s.avg_power));
           if (s.max_power) document.getElementById('wvPowerMax').value = String(Math.round(s.max_power));
+          if (s.avg_speed) document.getElementById('wvPaceAvg').value = paceToDisplay(Number(s.avg_speed || 0));
+          if (s.max_speed) document.getElementById('wvPaceMin').value = paceToDisplay(Number(s.max_speed || 0));
+          if (s.min_speed) document.getElementById('wvPaceMax').value = paceToDisplay(Number(s.min_speed || 0));
+          const minAlt = Number(s.min_altitude ?? s.min_elevation ?? 0);
+          const avgAlt = Number(s.avg_altitude ?? s.avg_elevation ?? 0);
+          const maxAlt = Number(s.max_altitude ?? s.max_elevation ?? 0);
+          if (minAlt > 0) document.getElementById('wvElevMin').value = String(Math.round(toDisplayElevationFromMeters(minAlt, elevationUnitLocal).value));
+          if (avgAlt > 0) document.getElementById('wvElevAvg').value = String(Math.round(toDisplayElevationFromMeters(avgAlt, elevationUnitLocal).value));
+          if (maxAlt > 0) document.getElementById('wvElevMax').value = String(Math.round(toDisplayElevationFromMeters(maxAlt, elevationUnitLocal).value));
         }).catch(() => {});
       }
 
@@ -2217,37 +2650,118 @@
       document.getElementById('wvHeaderDistance').textContent = completedDistanceM ? fmtDistanceMeters(completedDistanceM) : '--';
       document.getElementById('wvHeaderTss').textContent = completedTss ? `${Math.round(completedTss)} TSS` : '-- TSS';
 
-      ['pcDurComp', 'pcDistComp', 'pcElevComp', 'pcTssComp', 'pcIfComp', 'pcDurPlan', 'pcDistPlan', 'pcElevPlan', 'pcTssPlan', 'pcIfPlan'].forEach((id) => {
+      const allMainFieldIds = [
+        'pcDurComp', 'pcDistComp', 'pcElevComp', 'pcElevLossComp', 'pcTssComp', 'pcIfComp',
+        'pcDurPlan', 'pcDistPlan', 'pcElevPlan', 'pcElevLossPlan', 'pcTssPlan', 'pcIfPlan',
+      ];
+      allMainFieldIds.forEach((id) => {
         const el = document.getElementById(id);
+        if (!el) return;
         el.classList.remove('muted');
         el.disabled = false;
         el.readOnly = false;
         el.classList.remove('no-entry');
         el.oninput = null;
       });
-      const completedFieldIds = ['pcDurComp', 'pcDistComp', 'pcElevComp', 'pcTssComp', 'pcIfComp', 'pcAvgSpeedComp', 'pcCaloriesComp', 'pcNpComp', 'pcWorkComp', 'wvHrMin', 'wvHrAvg', 'wvHrMax', 'wvPowerAvg', 'wvPowerMax'];
-      const futureWorkout = isFutureDateKey(parentPlanned ? parentPlanned.date : data.date);
-      completedFieldIds.forEach((id) => {
+      [
+        'pcAvgSpeedPlan', 'pcAvgSpeedComp', 'pcAvgPacePlan', 'pcAvgPaceComp',
+        'pcCaloriesPlan', 'pcCaloriesComp', 'pcNpPlan', 'pcNpComp', 'pcWorkPlan', 'pcWorkComp',
+        'wvHrMin', 'wvHrAvg', 'wvHrMax', 'wvPowerMin', 'wvPowerAvg', 'wvPowerMax',
+        'wvPaceMin', 'wvPaceAvg', 'wvPaceMax', 'wvElevMin', 'wvElevAvg', 'wvElevMax',
+      ].forEach((id) => {
         const el = document.getElementById(id);
         if (!el) return;
-        el.disabled = futureWorkout;
-        el.classList.toggle('muted', futureWorkout);
-        el.classList.toggle('no-entry', futureWorkout);
+        el.disabled = false;
+        el.readOnly = false;
+        el.classList.remove('muted', 'no-entry');
       });
-      const powerMinNode = document.getElementById('wvPowerMin');
-      powerMinNode.disabled = true;
-      powerMinNode.readOnly = true;
-      powerMinNode.classList.add('muted', 'no-entry');
-      const npPlanNode = document.getElementById('pcNpPlan');
-      npPlanNode.disabled = true;
-      npPlanNode.readOnly = true;
-      npPlanNode.classList.add('muted', 'no-entry');
 
-      const cyclingRows = ['pcAvgSpeedPlan', 'pcCaloriesPlan', 'pcNpPlan', 'pcWorkPlan'];
-      cyclingRows.forEach((id) => {
-        const row = document.getElementById(id).closest('.tp-row');
-        if (row) row.style.display = isCycling ? '' : 'none';
+      const lockField = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.disabled = true;
+        el.readOnly = true;
+        el.classList.add('muted', 'no-entry');
+      };
+      // Keep min-power non-editable by design.
+      lockField('wvPowerMin');
+      const visibleMainRows = new Set(summaryProfile.mainRows || []);
+      if (summaryProfile.showAvgSpeedRow) visibleMainRows.add('avg_speed');
+      if (summaryProfile.showAvgPaceRow) visibleMainRows.add('avg_pace');
+      if (summaryProfile.showElevationRow) visibleMainRows.add('elev_gain');
+      if (summaryProfile.showElevationLossRow) visibleMainRows.add('elev_loss');
+      if (summaryProfile.showNpRow) visibleMainRows.add('np');
+      if (summaryProfile.showWorkRow) visibleMainRows.add('work');
+      const mainRowMap = {
+        duration: 'tpRowDuration',
+        distance: 'tpRowDistance',
+        avg_speed: 'tpRowAvgSpeed',
+        avg_pace: 'tpRowAvgPace',
+        calories: 'tpRowCalories',
+        elev_gain: 'tpRowElevation',
+        elev_loss: 'tpRowElevationLoss',
+        tss: 'tpRowTss',
+        if: 'tpRowIf',
+        np: 'tpRowNp',
+        work: 'tpRowWork',
+      };
+      Object.entries(mainRowMap).forEach(([key, rowId]) => {
+        const row = document.getElementById(rowId);
+        if (!row) return;
+        row.style.display = visibleMainRows.has(key) ? '' : 'none';
       });
+      const minmaxRowMap = {
+        heart: 'tpMinmaxHeart',
+        power: 'tpMinmaxPower',
+        pace: 'tpMinmaxPace',
+        elevation: 'tpMinmaxElevation',
+      };
+      const visibleMinmaxRows = new Set(summaryProfile.minmaxRows || []);
+      Object.entries(minmaxRowMap).forEach(([key, rowId]) => {
+        const row = document.getElementById(rowId);
+        if (!row) return;
+        row.style.display = visibleMinmaxRows.has(key) ? '' : 'none';
+      });
+      const eqBikeRow = document.getElementById('tpEqBikeRow');
+      const eqShoesRow = document.getElementById('tpEqShoesRow');
+      const eqExtraRow = document.getElementById('tpEqExtraRow');
+      if (eqBikeRow) eqBikeRow.style.display = (summaryProfile.equipment || []).includes('bike') ? '' : 'none';
+      if (eqShoesRow) eqShoesRow.style.display = (summaryProfile.equipment || []).includes('shoes') ? '' : 'none';
+      if (eqExtraRow) eqExtraRow.style.display = (summaryProfile.equipment || []).includes('pools') ? '' : 'none';
+      const eqExtraLabel = document.getElementById('tpEqExtraLabel');
+      if (eqExtraLabel) eqExtraLabel.textContent = (summaryProfile.equipment || []).includes('pools') ? 'Pools' : 'Extra';
+      const eqExtraSelect = document.getElementById('tpEqExtraSelect');
+      if (eqExtraSelect && (summaryProfile.equipment || []).includes('pools')) {
+        eqExtraSelect.innerHTML = '<option>Select Pool</option>';
+      }
+      summaryProfile.lockAlways.forEach(lockField);
+      summaryProfile.lockPlannedOnly.forEach(lockField);
+
+      if (isFutureWorkout) {
+        [
+          'pcDurComp', 'pcDistComp', 'pcElevComp', 'pcElevLossComp', 'pcTssComp', 'pcIfComp',
+          'pcAvgSpeedComp', 'pcAvgPaceComp', 'pcCaloriesComp', 'pcNpComp', 'pcWorkComp',
+          'wvHrMin', 'wvHrAvg', 'wvHrMax', 'wvPowerMin', 'wvPowerAvg', 'wvPowerMax',
+          'wvPaceMin', 'wvPaceAvg', 'wvPaceMax', 'wvElevMin', 'wvElevAvg', 'wvElevMax',
+        ].forEach(lockField);
+        const tssSourceSelect = document.getElementById('pcTssCompUnit');
+        if (tssSourceSelect) tssSourceSelect.disabled = true;
+        document.querySelectorAll('.feel-btn').forEach((btn) => {
+          btn.disabled = true;
+          btn.classList.add('no-entry');
+        });
+        const rpe = document.getElementById('wvRpe');
+        if (rpe) {
+          rpe.disabled = true;
+          rpe.classList.add('no-entry');
+        }
+      } else {
+        const tssSourceSelect = document.getElementById('pcTssCompUnit');
+        if (tssSourceSelect) tssSourceSelect.disabled = false;
+        document.querySelectorAll('.feel-btn').forEach((btn) => btn.classList.remove('no-entry'));
+        const rpe = document.getElementById('wvRpe');
+        if (rpe) rpe.classList.remove('no-entry');
+      }
 
       function recalcDerivedLive() {
         const pDurMin = parseDurationToMin(document.getElementById('pcDurPlan').value);
@@ -2257,10 +2771,12 @@
         if (pDurMin > 0 && pDistM > 0) {
           const pSpeedMps = pDistM / (pDurMin * 60);
           document.getElementById('pcAvgSpeedPlan').value = speedToDisplay(pSpeedMps);
+          document.getElementById('pcAvgPacePlan').value = paceToDisplay(pSpeedMps);
         }
         if (cDurMin > 0 && cDistM > 0) {
           const cSpeedMps = cDistM / (cDurMin * 60);
           document.getElementById('pcAvgSpeedComp').value = speedToDisplay(cSpeedMps);
+          document.getElementById('pcAvgPaceComp').value = paceToDisplay(cSpeedMps);
         }
         if (!data.fit_id) {
           const ftpRide = Number((appSettings.ftp || {}).ride || 0);
@@ -2276,8 +2792,12 @@
             if (ftpRide > 0) {
               const ifv = np / ftpRide;
               const tss = (durS * np * ifv) / (ftpRide * 3600) * 100;
-              document.getElementById('pcIfComp').value = ifv.toFixed(2);
-              document.getElementById('pcTssComp').value = String(Math.round(tss));
+              if (!document.getElementById('pcIfComp').value) {
+                document.getElementById('pcIfComp').value = ifv.toFixed(2);
+              }
+              if (!document.getElementById('pcTssComp').value) {
+                document.getElementById('pcTssComp').value = String(Math.round(tss));
+              }
             }
           }
         }
@@ -2291,25 +2811,101 @@
         const nextComp = toDisplayDistanceFromMeters(compMeters, nextUnit);
         document.getElementById('pcDistPlan').value = planMeters > 0 ? nextPlan.value.toFixed(nextUnit === 'm' ? 0 : 1) : '';
         document.getElementById('pcDistComp').value = compMeters > 0 ? nextComp.value.toFixed(nextUnit === 'm' ? 0 : 1) : '';
+        document.getElementById('pcAvgSpeedUnit').textContent = nextUnit === 'mi'
+          ? 'mph'
+          : (nextUnit === 'm'
+            ? 'm/s'
+            : (nextUnit === 'yd' ? 'yd/s' : 'km/h'));
+        document.getElementById('pcAvgPaceUnit').textContent = summaryProfile.avgPaceMode === 'per_100'
+          ? `sec/100 ${nextUnit}`
+          : (nextUnit === 'mi' ? 'min/mi' : 'min/km');
+        const speedDisplayToMps = (raw) => {
+          const sv = Number(raw || 0);
+          if (!(sv > 0)) return 0;
+          if (nextUnit === 'mi') return sv / 2.23694;
+          if (nextUnit === 'km') return sv / 3.6;
+          if (nextUnit === 'yd') return sv * 0.9144;
+          return sv;
+        };
+        const pSpeedMps = parsePaceToMps(
+          document.getElementById('pcAvgPacePlan').value,
+          summaryProfile.avgPaceMode,
+          nextUnit
+        ) || speedDisplayToMps(document.getElementById('pcAvgSpeedPlan').value);
+        const cSpeedMps = parsePaceToMps(
+          document.getElementById('pcAvgPaceComp').value,
+          summaryProfile.avgPaceMode,
+          nextUnit
+        ) || speedDisplayToMps(document.getElementById('pcAvgSpeedComp').value);
+        if (pSpeedMps > 0) {
+          document.getElementById('pcAvgSpeedPlan').value = speedToDisplay(pSpeedMps);
+          document.getElementById('pcAvgPacePlan').value = paceToDisplay(pSpeedMps);
+        }
+        if (cSpeedMps > 0) {
+          document.getElementById('pcAvgSpeedComp').value = speedToDisplay(cSpeedMps);
+          document.getElementById('pcAvgPaceComp').value = paceToDisplay(cSpeedMps);
+        }
       };
       const syncElevationUnits = (nextUnit) => {
         const planMeters = fromDisplayElevationToMeters(document.getElementById('pcElevPlan').value, elevationUnitLocal);
         const compMeters = fromDisplayElevationToMeters(document.getElementById('pcElevComp').value, elevationUnitLocal);
+        const planLossMeters = fromDisplayElevationToMeters(document.getElementById('pcElevLossPlan').value, elevationUnitLocal);
+        const compLossMeters = fromDisplayElevationToMeters(document.getElementById('pcElevLossComp').value, elevationUnitLocal);
         elevationUnitLocal = nextUnit;
         const nextPlan = toDisplayElevationFromMeters(planMeters, nextUnit);
         const nextComp = toDisplayElevationFromMeters(compMeters, nextUnit);
+        const nextPlanLoss = toDisplayElevationFromMeters(planLossMeters, nextUnit);
+        const nextCompLoss = toDisplayElevationFromMeters(compLossMeters, nextUnit);
         document.getElementById('pcElevPlan').value = planMeters > 0 ? nextPlan.value.toFixed(nextUnit === 'm' ? 0 : 1) : '';
         document.getElementById('pcElevComp').value = compMeters > 0 ? nextComp.value.toFixed(nextUnit === 'm' ? 0 : 1) : '';
+        document.getElementById('pcElevLossPlan').value = planLossMeters > 0 ? nextPlanLoss.value.toFixed(nextUnit === 'm' ? 0 : 1) : '';
+        document.getElementById('pcElevLossComp').value = compLossMeters > 0 ? nextCompLoss.value.toFixed(nextUnit === 'm' ? 0 : 1) : '';
+        document.getElementById('pcElevLossUnit').textContent = nextUnit;
+        document.getElementById('wvElevUnit').textContent = nextUnit;
       };
       document.getElementById('pcDistanceUnit').onchange = (ev) => syncDistanceUnits(ev.target.value);
       document.getElementById('pcElevationUnit').onchange = (ev) => syncElevationUnits(ev.target.value);
       ['pcDurPlan', 'pcDurComp', 'pcTssPlan', 'pcTssComp', 'pcIfPlan', 'pcIfComp'].forEach((id) => {
         document.getElementById(id).onchange = recalcIfTssRows;
       });
-      ['pcDurPlan', 'pcDurComp', 'pcDistPlan', 'pcDistComp', 'wvPowerAvg'].forEach((id) => {
+      const syncAvgFromManualInput = (id) => {
+        if (id === 'pcAvgPacePlan') {
+          const mps = parsePaceToMps(document.getElementById(id).value, summaryProfile.avgPaceMode, distanceUnitLocal);
+          document.getElementById('pcAvgSpeedPlan').value = mps > 0 ? speedToDisplay(mps) : '';
+        } else if (id === 'pcAvgPaceComp') {
+          const mps = parsePaceToMps(document.getElementById(id).value, summaryProfile.avgPaceMode, distanceUnitLocal);
+          document.getElementById('pcAvgSpeedComp').value = mps > 0 ? speedToDisplay(mps) : '';
+        } else if (id === 'pcAvgSpeedPlan') {
+          const speedVal = Number(document.getElementById(id).value || 0);
+          const mps = speedVal > 0
+            ? (distanceUnitLocal === 'mi'
+              ? (speedVal / 2.23694)
+              : (distanceUnitLocal === 'km'
+                ? (speedVal / 3.6)
+                : (distanceUnitLocal === 'yd'
+                  ? (speedVal * 0.9144)
+                  : speedVal)))
+            : 0;
+          document.getElementById('pcAvgPacePlan').value = mps > 0 ? paceToDisplay(mps) : '';
+        } else if (id === 'pcAvgSpeedComp') {
+          const speedVal = Number(document.getElementById(id).value || 0);
+          const mps = speedVal > 0
+            ? (distanceUnitLocal === 'mi'
+              ? (speedVal / 2.23694)
+              : (distanceUnitLocal === 'km'
+                ? (speedVal / 3.6)
+                : (distanceUnitLocal === 'yd'
+                  ? (speedVal * 0.9144)
+                  : speedVal)))
+            : 0;
+          document.getElementById('pcAvgPaceComp').value = mps > 0 ? paceToDisplay(mps) : '';
+        }
+      };
+      ['pcDurPlan', 'pcDurComp', 'pcDistPlan', 'pcDistComp', 'wvPowerAvg', 'pcAvgSpeedPlan', 'pcAvgSpeedComp', 'pcAvgPacePlan', 'pcAvgPaceComp'].forEach((id) => {
         const n = document.getElementById(id);
         if (!n) return;
         n.oninput = () => {
+          syncAvgFromManualInput(id);
           recalcIfTssRows();
           recalcDerivedLive();
         };
@@ -3796,7 +4392,6 @@
 
     function renderTodayFeed() {
       const today = todayKey();
-      const yesterday = yesterdayKey();
       const feed = document.getElementById('todayFeed');
       const todayActions = document.getElementById('todayActions');
       feed.innerHTML = '';
@@ -3806,15 +4401,6 @@
       const doneToday = activities.filter(a => dateKeyFromDate(new Date(a.start_date_local)) === today);
       const plannedToday = calendarItems.filter(i => i.kind === 'workout' && i.date === today)
         .sort((a, b) => (a.date > b.date ? 1 : -1));
-
-      // Yesterday's missed planned workouts (no pair, no manual completion)
-      const missedYesterday = calendarItems.filter(i => {
-        if (i.kind !== 'workout' || i.date !== yesterday) return false;
-        const pair = pairForPlanned(String(i.id));
-        if (pair) return false;
-        if (Number(i.completed_duration_min || 0) > 0) return false;
-        return true;
-      });
 
       // Metrics cards
       metricsItems.forEach(m => {
@@ -3932,33 +4518,7 @@
         feed.appendChild(card);
       });
 
-      // Yesterday's missed planned workouts — shown as red
-      missedYesterday.forEach(p => {
-        const sportKey = workoutTypeSportKey(p.workout_type);
-        const iconSrc = ICON_ASSETS[sportKey] || ICON_ASSETS.other;
-        const plannedMin = Number(p.duration_min || 0);
-        const tss = itemToTss(p);
-        const card = document.createElement('div');
-        card.className = 'today-card today-card-red';
-        card.innerHTML = `
-          <div class="today-card-sport">
-            ${p.workout_type || 'Workout'}
-            <span class="badge" style="margin-left:auto;background:#fde9e9;color:#c0392b;">Missed</span>
-          </div>
-          <div class="today-card-stats">
-            <img class="today-card-icon" src="${iconSrc}" alt="${p.workout_type}" />
-            <span class="today-stat-big">${plannedMin ? plannedMin + ' min' : '--'}</span>
-            <span class="today-stat-big">${fmtDistanceKm(p.distance_km)}</span>
-            <span class="today-stat-big">${tss} <span class="today-stat-unit">TSS</span></span>
-          </div>
-          ${homeWorkoutFeedbackMarkup(p)}`;
-        card.style.cursor = 'pointer';
-        card.addEventListener('click', () => openWorkoutModal({ source: 'planned', data: p, planned: p, pair: null }));
-        card.addEventListener('contextmenu', ev => showItemMenu(ev, { source: 'planned', data: p }));
-        feed.appendChild(card);
-      });
-
-      if (!doneToday.length && !plannedToday.length && !missedYesterday.length) {
+      if (!doneToday.length && !plannedToday.length) {
         if (todayActions) {
           todayActions.innerHTML = `
             <p class="meta">Nothing logged for today.</p>
@@ -4042,21 +4602,40 @@
 
           // Cell-level drag fallback: catches drops anywhere in the day cell
           cell.addEventListener('dragover', (ev) => ev.preventDefault());
-          cell.addEventListener('drop', (ev) => {
+          cell.addEventListener('drop', async (ev) => {
             ev.preventDefault();
             const dragData = currentDragData;
-            if (!dragData || dragData.source !== 'strava') return;
+            if (!dragData) return;
             // Remove any lingering drop-target highlights
             cell.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
             // Find the single unpaired planned workout for this day
             const unpairedPlanned = calendarItems.filter(i =>
               i.kind === 'workout' && i.date === key && !pairByPlannedId.get(String(i.id))
             );
-            if (unpairedPlanned.length === 1) {
+            if (unpairedPlanned.length === 1 && dragData.source === 'strava') {
               const draggedCompleted = activities.find((a) => String(a.id) === String(dragData.id));
               if (canPairWorkouts(unpairedPlanned[0], draggedCompleted)) {
                 confirmAndPair(String(unpairedPlanned[0].id), String(dragData.id));
               }
+              return;
+            }
+            if (unpairedPlanned.length === 1 && dragData.source === 'planned_completed') {
+              const draggedCompletedPlanned = calendarItems.find((i) => String(i.id) === String(dragData.id));
+              if (canPairManualCompletedWithPlanned(draggedCompletedPlanned, unpairedPlanned[0])) {
+                pairManualCompletedWithPlanned(String(dragData.id), String(unpairedPlanned[0].id));
+                return;
+              }
+            }
+            if (dragData.source === 'planned' || dragData.source === 'planned_completed') {
+              const draggedPlanned = calendarItems.find((i) => String(i.id) === String(dragData.id));
+              const moved = await movePlannedWorkoutToDate(draggedPlanned, key);
+              if (moved) await loadData();
+              return;
+            }
+            if (dragData.source === 'strava') {
+              const draggedCompleted = activities.find((a) => String(a.id) === String(dragData.id));
+              const moved = await moveCompletedWorkoutToDate(draggedCompleted, key);
+              if (moved) await loadData();
             }
           });
 
@@ -4200,7 +4779,8 @@
               card.dataset.kind = 'planned';
               card.dataset.plannedId = String(item.id);
               card.addEventListener('dragstart', (ev) => {
-                currentDragData = { source: 'planned', id: String(item.id) };
+                const sourceType = hasManualCompletedOnlyContent(item) && !entry.pair ? 'planned_completed' : 'planned';
+                currentDragData = { source: sourceType, id: String(item.id) };
                 ev.dataTransfer.setData('text/plain', JSON.stringify(currentDragData));
                 card.classList.add('dragging-active');
               });
@@ -4209,9 +4789,16 @@
               card.addEventListener('dragenter', (ev) => {
                 ev.preventDefault();
                 const dragData = currentDragData;
-                if (!dragData || dragData.source !== 'strava') return;
-                const draggedCompleted = activities.find((a) => String(a.id) === String(dragData.id));
-                if (canPairWorkouts(item, draggedCompleted)) card.classList.add('drop-target');
+                if (!dragData) return;
+                if (dragData.source === 'strava') {
+                  const draggedCompleted = activities.find((a) => String(a.id) === String(dragData.id));
+                  if (canPairWorkouts(item, draggedCompleted)) card.classList.add('drop-target');
+                  return;
+                }
+                if (dragData.source === 'planned_completed') {
+                  const draggedCompletedPlanned = calendarItems.find((i) => String(i.id) === String(dragData.id));
+                  if (canPairManualCompletedWithPlanned(draggedCompletedPlanned, item)) card.classList.add('drop-target');
+                }
               });
               card.addEventListener('dragleave', (ev) => {
                 if (!card.contains(ev.relatedTarget)) card.classList.remove('drop-target');
@@ -4225,6 +4812,13 @@
                   const draggedCompleted = activities.find((a) => String(a.id) === String(dragData.id));
                   if (canPairWorkouts(item, draggedCompleted)) {
                     confirmAndPair(String(item.id), String(dragData.id));
+                  }
+                  return;
+                }
+                if (dragData && dragData.source === 'planned_completed') {
+                  const draggedCompletedPlanned = calendarItems.find((i) => String(i.id) === String(dragData.id));
+                  if (canPairManualCompletedWithPlanned(draggedCompletedPlanned, item)) {
+                    pairManualCompletedWithPlanned(String(dragData.id), String(item.id));
                   }
                 }
               });

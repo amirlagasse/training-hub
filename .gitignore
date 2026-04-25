@@ -11,3 +11,5 @@ icons_debug/
 
 # Python cache
 *.pyc
+tp_export/
+workout_ids*.json

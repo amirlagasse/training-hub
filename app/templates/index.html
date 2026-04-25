@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Training Freaks</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=20260420d" />
+    <link rel="stylesheet" href="/static/css/app.css?v=20260423b" />
 </head>
 <body>
   <header class="top-nav">
@@ -507,14 +507,14 @@
                     <div class="tp-table-head">
                       <div></div><div>Planned</div><div>Completed</div><div></div>
                     </div>
-                    <div class="tp-row">
-                      <label>Duration</label>
+                    <div id="tpRowDuration" class="tp-row">
+                      <label id="pcDurLabel">Duration</label>
                       <input id="pcDurPlan" class="tp-in" />
                       <input id="pcDurComp" class="tp-in" />
-                      <div class="tp-unit">h:m:s</div>
+                      <div id="pcDurUnit" class="tp-unit">h:m:s</div>
                     </div>
-                    <div class="tp-row">
-                      <label>Distance</label>
+                    <div id="tpRowDistance" class="tp-row">
+                      <label id="pcDistLabel">Distance</label>
                       <input id="pcDistPlan" class="tp-in" />
                       <input id="pcDistComp" class="tp-in" />
                       <div class="tp-unit">
@@ -522,23 +522,30 @@
                           <option value="km">km</option>
                           <option value="mi">mi</option>
                           <option value="m">m</option>
+                          <option value="yd">yd</option>
                         </select>
                       </div>
                     </div>
-                    <div class="tp-row">
-                      <label>Average Speed</label>
+                    <div id="tpRowAvgSpeed" class="tp-row">
+                      <label id="pcAvgSpeedLabel">Average Speed</label>
                       <input id="pcAvgSpeedPlan" class="tp-in" />
                       <input id="pcAvgSpeedComp" class="tp-in" />
-                      <div class="tp-unit">speed</div>
+                      <div id="pcAvgSpeedUnit" class="tp-unit">speed</div>
                     </div>
-                    <div class="tp-row">
-                      <label>Calories</label>
+                    <div id="tpRowAvgPace" class="tp-row" style="display:none;">
+                      <label id="pcAvgPaceLabel">Average Pace</label>
+                      <input id="pcAvgPacePlan" class="tp-in" />
+                      <input id="pcAvgPaceComp" class="tp-in" />
+                      <div id="pcAvgPaceUnit" class="tp-unit">pace</div>
+                    </div>
+                    <div id="tpRowCalories" class="tp-row">
+                      <label id="pcCaloriesLabel">Calories</label>
                       <input id="pcCaloriesPlan" class="tp-in" />
                       <input id="pcCaloriesComp" class="tp-in" />
-                      <div class="tp-unit">kcal</div>
+                      <div id="pcCaloriesUnit" class="tp-unit">kcal</div>
                     </div>
-                    <div class="tp-row">
-                      <label>Elevation</label>
+                    <div id="tpRowElevation" class="tp-row">
+                      <label id="pcElevLabel">Elevation Gain</label>
                       <input id="pcElevPlan" class="tp-in" />
                       <input id="pcElevComp" class="tp-in" />
                       <div class="tp-unit">
@@ -548,8 +555,14 @@
                         </select>
                       </div>
                     </div>
-                    <div class="tp-row">
-                      <label>TSS</label>
+                    <div id="tpRowElevationLoss" class="tp-row" style="display:none;">
+                      <label id="pcElevLossLabel">Elevation Loss</label>
+                      <input id="pcElevLossPlan" class="tp-in" />
+                      <input id="pcElevLossComp" class="tp-in" />
+                      <div id="pcElevLossUnit" class="tp-unit">m</div>
+                    </div>
+                    <div id="tpRowTss" class="tp-row">
+                      <label id="pcTssLabel">TSS</label>
                       <input id="pcTssPlan" class="tp-in" />
                       <input id="pcTssComp" class="tp-in" />
                       <div class="tp-unit">
@@ -560,49 +573,67 @@
                         </select>
                       </div>
                     </div>
-                    <div class="tp-row">
-                      <label>IF</label>
+                    <div id="tpRowIf" class="tp-row">
+                      <label id="pcIfLabel">IF</label>
                       <input id="pcIfPlan" class="tp-in" />
                       <input id="pcIfComp" class="tp-in" />
-                      <div class="tp-unit">IF</div>
+                      <div id="pcIfUnit" class="tp-unit">IF</div>
                     </div>
-                    <div class="tp-row">
-                      <label>Normalized Power</label>
+                    <div id="tpRowNp" class="tp-row">
+                      <label id="pcNpLabel">Normalized Power</label>
                       <input id="pcNpPlan" class="tp-in" />
                       <input id="pcNpComp" class="tp-in" />
-                      <div class="tp-unit">W</div>
+                      <div id="pcNpUnit" class="tp-unit">W</div>
                     </div>
-                    <div class="tp-row">
-                      <label>Work</label>
+                    <div id="tpRowWork" class="tp-row">
+                      <label id="pcWorkLabel">Work</label>
                       <input id="pcWorkPlan" class="tp-in" />
                       <input id="pcWorkComp" class="tp-in" />
-                      <div class="tp-unit">kJ</div>
+                      <div id="pcWorkUnit" class="tp-unit">kJ</div>
                     </div>
                     <div class="tp-minmax-head">
                       <div></div><div>Min</div><div>Avg</div><div>Max</div><div></div>
                     </div>
-                    <div class="tp-minmax-row">
-                      <label>Heart Rate</label>
+                    <div id="tpMinmaxHeart" class="tp-minmax-row">
+                      <label id="wvHrLabel">Heart Rate</label>
                       <input id="wvHrMin" class="tp-in" />
                       <input id="wvHrAvg" class="tp-in" />
                       <input id="wvHrMax" class="tp-in" />
-                      <div class="tp-unit">bpm</div>
+                      <div id="wvHrUnit" class="tp-unit">bpm</div>
                     </div>
-                    <div class="tp-minmax-row">
-                      <label>Power</label>
+                    <div id="tpMinmaxPower" class="tp-minmax-row">
+                      <label id="wvPowerLabel">Power</label>
                       <input id="wvPowerMin" class="tp-in" />
                       <input id="wvPowerAvg" class="tp-in" />
                       <input id="wvPowerMax" class="tp-in" />
-                      <div class="tp-unit">W</div>
+                      <div id="wvPowerUnit" class="tp-unit">W</div>
+                    </div>
+                    <div id="tpMinmaxPace" class="tp-minmax-row" style="display:none;">
+                      <label id="wvPaceLabel">Pace</label>
+                      <input id="wvPaceMin" class="tp-in" />
+                      <input id="wvPaceAvg" class="tp-in" />
+                      <input id="wvPaceMax" class="tp-in" />
+                      <div id="wvPaceUnit" class="tp-unit">min/mi</div>
+                    </div>
+                    <div id="tpMinmaxElevation" class="tp-minmax-row" style="display:none;">
+                      <label id="wvElevLabel">Elevation</label>
+                      <input id="wvElevMin" class="tp-in" />
+                      <input id="wvElevAvg" class="tp-in" />
+                      <input id="wvElevMax" class="tp-in" />
+                      <div id="wvElevUnit" class="tp-unit">ft</div>
                     </div>
                     <div class="tp-equipment-title">Equipment</div>
-                    <div class="tp-eq-row">
-                      <label>Bike</label>
-                      <select class="tp-select"><option>Select Bike</option></select>
+                    <div id="tpEqBikeRow" class="tp-eq-row">
+                      <label id="tpEqBikeLabel">Bike</label>
+                      <select id="tpEqBikeSelect" class="tp-select"><option>Select Bike</option></select>
                     </div>
-                    <div class="tp-eq-row">
-                      <label>Shoes</label>
-                      <select class="tp-select"><option>Select Shoe</option></select>
+                    <div id="tpEqShoesRow" class="tp-eq-row">
+                      <label id="tpEqShoesLabel">Shoes</label>
+                      <select id="tpEqShoesSelect" class="tp-select"><option>Select Shoe</option></select>
+                    </div>
+                    <div id="tpEqExtraRow" class="tp-eq-row" style="display:none;">
+                      <label id="tpEqExtraLabel">Pools</label>
+                      <select id="tpEqExtraSelect" class="tp-select"><option>Select Pool</option></select>
                     </div>
                   </div>
                   <div class="tp-right-block">
@@ -757,6 +788,6 @@
     </div>
   </div>
 
-    <script src="/static/js/app.js?v=20260420d"></script>
+    <script src="/static/js/app.js?v=20260423b"></script>
 </body>
 </html>

@@ -615,7 +615,7 @@
     }
 
     [data-theme="dark"] .work-card.done         { border-top-color: #3fb950; background: #0d2118; }
-    [data-theme="dark"] .work-card.workout      { border-top-color: #44627f; background: #151c27; }
+    [data-theme="dark"] .work-card.workout      { border-top-color: transparent; background: #151c27; }
     [data-theme="dark"] .work-card.unplanned    { border-top-color: #3d4a59; background: #151c27; }
     [data-theme="dark"] .work-card.paired-green  { border-top-color: #3fb950; background: #0d2118; }
     [data-theme="dark"] .work-card.paired-orange { border-top-color: #ff8c42; background: #1f1206; }
@@ -891,6 +891,15 @@
     }
 
     .today-card-metrics .today-card-sport { background: var(--bg); }
+    .today-card-planned .today-card-sport { background: #f8fafc; color: #50657d; }
+    .today-card-planned .today-card-stats { background: #fbfcfe; }
+    .today-card-completed:not(.today-card-green):not(.today-card-yellow):not(.today-card-orange):not(.today-card-red) .today-card-sport {
+      background: #e9eef4;
+      color: #334a63;
+    }
+    .today-card-completed:not(.today-card-green):not(.today-card-yellow):not(.today-card-orange):not(.today-card-red) .today-card-stats {
+      background: #ffffff;
+    }
 
     /* Completion quality states */
     .today-card-green .today-card-sport  { background: #eef7e9; }
@@ -1588,7 +1597,12 @@
     }
 
     .work-card.done { border-top-color: #5dc95a; background: #f5fff4; }
-    .work-card.workout { border-top-color: #c7d5e6; background: #ffffff; }
+    .work-card.workout {
+      border-top-color: transparent;
+      border-top-width: 0;
+      background: #ffffff;
+      padding-top: 6px;
+    }
     .work-card.unplanned { border-top-color: #a8b4c5; background: #ffffff; }
 
     /* Drag-to-pair visual feedback */
@@ -3855,6 +3869,12 @@
       border-top-width: 10px;
       background: #151c27;
     }
+    [data-theme="dark"] .work-card.workout {
+      border-top-width: 0;
+      padding-top: 6px;
+      border-top-color: transparent;
+      background: #151c27;
+    }
     [data-theme="dark"] .work-card.paired-green,
     [data-theme="dark"] .work-card.done {
       background: #12301f !important;
@@ -3879,6 +3899,20 @@
     }
     [data-theme="dark"] .today-card-red .today-card-stats {
       background: #8f2c34;
+    }
+    [data-theme="dark"] .today-card-planned .today-card-sport {
+      background: #18202d;
+      color: #9db0c4;
+    }
+    [data-theme="dark"] .today-card-planned .today-card-stats {
+      background: #141b27;
+    }
+    [data-theme="dark"] .today-card-completed:not(.today-card-green):not(.today-card-yellow):not(.today-card-orange):not(.today-card-red) .today-card-sport {
+      background: #242d3b;
+      color: #d4ddea;
+    }
+    [data-theme="dark"] .today-card-completed:not(.today-card-green):not(.today-card-yellow):not(.today-card-orange):not(.today-card-red) .today-card-stats {
+      background: #141b27;
     }
     [data-theme="dark"] .today-card-feedback {
       color: #c0ccd8;

@@ -1,11 +1,12 @@
 import contextlib
+import gzip
 import json
 import io
 import os
 import secrets
 import sqlite3
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -934,17 +935,191 @@ def save_fit_parsed(fit_id: str, data: dict[str, Any]) -> None:
         )
 
 
+def _tp_channel_index(channel_set: Any) -> dict[str, int]:
+    out: dict[str, int] = {}
+    if not isinstance(channel_set, list):
+        return out
+    for idx, name in enumerate(channel_set):
+        key = str(name or "")
+        if not key:
+            continue
+        out[key] = idx
+        out[key.lower()] = idx
+    return out
+
+
+def _tp_channel_value(values: list[Any], idx_map: dict[str, int], *names: str) -> float | None:
+    for name in names:
+        idx = idx_map.get(name)
+        if idx is None:
+            idx = idx_map.get(name.lower())
+        if idx is None or idx < 0 or idx >= len(values):
+            continue
+        value = _as_float(values[idx])
+        if value is not None:
+            return value
+    return None
+
+
+def _build_fit_from_tp_stream(fit_id: str) -> dict[str, Any]:
+    try:
+        with get_db() as db:
+            activity_row = db.execute(
+                """
+                SELECT start_date_local, type, distance, moving_time, if_value, tss_override,
+                       np_value, hr_tss, work_kj, calories, avg_speed, avg_power, avg_hr,
+                       max_hr, max_power
+                FROM activities
+                WHERE fit_id = ?
+                """,
+                (fit_id,),
+            ).fetchone()
+            stream_row = db.execute(
+                """
+                SELECT channel_set_json, samples_gzip, encoding
+                FROM tp_streams
+                WHERE workout_id = ?
+                """,
+                (fit_id,),
+            ).fetchone()
+    except sqlite3.OperationalError as err:
+        raise HTTPException(status_code=404, detail=f"TP stream table unavailable: {err}") from err
+
+    if not activity_row or not stream_row:
+        raise HTTPException(status_code=404, detail="Parsed FIT data not found.")
+
+    raw_blob = stream_row["samples_gzip"]
+    if raw_blob is None:
+        raise HTTPException(status_code=404, detail="Parsed FIT data not found.")
+
+    channel_set_raw = stream_row["channel_set_json"]
+    try:
+        channel_set = json.loads(channel_set_raw) if channel_set_raw else []
+    except json.JSONDecodeError:
+        channel_set = []
+
+    raw_bytes = bytes(raw_blob)
+    encoding = str(stream_row["encoding"] or "")
+    try:
+        payload_bytes = gzip.decompress(raw_bytes) if "gzip" in encoding else raw_bytes
+        samples = json.loads(payload_bytes.decode("utf-8"))
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"Corrupted TP stream payload: {err}") from err
+
+    if not isinstance(samples, list) or not samples:
+        raise HTTPException(status_code=404, detail="No TP stream samples found.")
+
+    start_raw = _iso(activity_row["start_date_local"]) or datetime.utcnow().isoformat()
+    try:
+        start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+    except ValueError:
+        start_dt = datetime.utcnow()
+
+    idx_map = _tp_channel_index(channel_set)
+    points: list[dict[str, Any]] = []
+    for row in samples:
+        if not isinstance(row, dict):
+            continue
+        ms = _as_float(row.get("ms"))
+        values = row.get("values")
+        if ms is None or not isinstance(values, list):
+            continue
+        ts = (start_dt + timedelta(milliseconds=ms)).isoformat()
+        point: dict[str, Any] = {"timestamp": ts}
+
+        hr = _tp_channel_value(values, idx_map, "heartRate", "heart_rate", "heartrate")
+        speed = _tp_channel_value(values, idx_map, "speed")
+        distance = _tp_channel_value(values, idx_map, "distance")
+        cadence = _tp_channel_value(values, idx_map, "cadence")
+        power = _tp_channel_value(values, idx_map, "power")
+
+        if hr is not None:
+            point["heart_rate"] = hr
+        if speed is not None:
+            point["speed"] = speed
+        if distance is not None:
+            point["distance"] = distance
+        if cadence is not None:
+            point["cadence"] = cadence
+        if power is not None:
+            point["power"] = power
+
+        if len(point) > 1:
+            points.append(point)
+
+    if not points:
+        raise HTTPException(status_code=404, detail="No supported TP stream channels available.")
+
+    first_ts = datetime.fromisoformat(points[0]["timestamp"].replace("Z", "+00:00"))
+    last_ts = datetime.fromisoformat(points[-1]["timestamp"].replace("Z", "+00:00"))
+    duration_s = _as_float(activity_row["moving_time"]) or max(1.0, (last_ts - first_ts).total_seconds())
+    distance_series = [p["distance"] for p in points if p.get("distance") is not None]
+    distance_m = _as_float(activity_row["distance"]) or (distance_series[-1] if distance_series else 0.0)
+
+    hr_values = [p["heart_rate"] for p in points if p.get("heart_rate") is not None]
+    speed_values = [p["speed"] for p in points if p.get("speed") is not None]
+    power_values = [p["power"] for p in points if p.get("power") is not None]
+    cadence_values = [p["cadence"] for p in points if p.get("cadence") is not None]
+
+    sport = str(activity_row["type"] or "Workout")
+    sport_key = sport_to_ftp_key(sport)
+
+    summary = {
+        "start": first_ts.isoformat(),
+        "end": last_ts.isoformat(),
+        "duration_s": duration_s,
+        "distance_m": distance_m,
+        "avg_hr": _as_float(activity_row["avg_hr"]) or _mean(hr_values),
+        "max_hr": _as_float(activity_row["max_hr"]) or _max(hr_values),
+        "avg_speed": _as_float(activity_row["avg_speed"]) or _mean(speed_values),
+        "max_speed": _max(speed_values),
+        "avg_power": _as_float(activity_row["avg_power"]) or _mean(power_values),
+        "max_power": _as_float(activity_row["max_power"]) or _max(power_values),
+        "avg_cadence": _mean(cadence_values),
+        "max_cadence": _max(cadence_values),
+        "elev_gain_m": None,
+        "work_kj": _as_float(activity_row["work_kj"]),
+        "calories": _as_float(activity_row["calories"]),
+        "sport": sport,
+        "sport_key": sport_key,
+        "ftp": None,
+        "lthr": None,
+        "if": _as_float(activity_row["if_value"]),
+        "tss": _as_float(activity_row["tss_override"]),
+        "hr_tss": _as_float(activity_row["hr_tss"]),
+        "normalized_power": _as_float(activity_row["np_value"]),
+    }
+    laps = [
+        {
+            "name": "Lap 1",
+            "start": first_ts.isoformat(),
+            "end": last_ts.isoformat(),
+            "duration_s": duration_s,
+            "distance_m": distance_m,
+            "avg_hr": summary["avg_hr"],
+            "max_hr": summary["max_hr"],
+            "avg_speed": summary["avg_speed"],
+            "max_speed": summary["max_speed"],
+            "avg_power": summary["avg_power"],
+            "max_power": summary["max_power"],
+            "avg_cadence": summary["avg_cadence"],
+            "max_cadence": summary["max_cadence"],
+        }
+    ]
+    return {"summary": summary, "series": points, "laps": laps}
+
+
 def load_fit_parsed(fit_id: str) -> dict[str, Any]:
     with get_db() as db:
         row = db.execute(
             "SELECT fit_parsed_json FROM activities WHERE fit_id = ?", (fit_id,)
         ).fetchone()
-    if not row or not row["fit_parsed_json"]:
-        raise HTTPException(status_code=404, detail="Parsed FIT data not found.")
-    try:
-        return json.loads(row["fit_parsed_json"])
-    except json.JSONDecodeError as err:
-        raise HTTPException(status_code=500, detail="Corrupted FIT parsed data.") from err
+    if row and row["fit_parsed_json"]:
+        try:
+            return json.loads(row["fit_parsed_json"])
+        except json.JSONDecodeError as err:
+            raise HTTPException(status_code=500, detail="Corrupted FIT parsed data.") from err
+    return _build_fit_from_tp_stream(fit_id)
 
 
 def demo_activities() -> list[dict[str, Any]]:
@@ -1726,16 +1901,6 @@ def create_pair(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     completed_key = sport_key(completed_item.get("type"))
     if planned_key != completed_key:
         raise HTTPException(status_code=400, detail="Pairing requires matching workout types.")
-    completed_has_planned = (
-        n(completed_item.get("duration_min")) > 0
-        or n(completed_item.get("distance_m")) > 0
-        or n(completed_item.get("distance_km")) > 0
-        or n(completed_item.get("planned_tss")) > 0
-        or n(completed_item.get("planned_if")) > 0
-    )
-    if completed_has_planned:
-        raise HTTPException(status_code=400, detail="Pairing requires a completed-only workout.")
-
     pairs = load_pairs()
     pairs = [p for p in pairs if p.get("planned_id") != planned_id and p.get("strava_id") != strava_id]
     new_pair = {
